@@ -91,3 +91,15 @@ test('history: duplicates collapse', () => {
   ]);
   assert.deepEqual([...got].sort(), [X, Y]);
 });
+test('history incomplete: a destination is never called unused while history is loading or failed', () => {
+  const fresh = { ...base, destination: Y as string, stealthAddress: S2, ownStealthAddresses: [S1, S2], usedDestinations: [] as Hex[] };
+  const incomplete = withdrawChecks({ ...fresh, historyComplete: false }).find((c) => c.id === 'H3');
+  assert.equal(incomplete?.level, 'warn');
+  assert.match(incomplete?.text ?? '', /history incomplete/);
+  // a known reuse still says so, even with incomplete history
+  assert.equal(h3(withdrawChecks({ ...fresh, destination: X, usedDestinations: [X], historyComplete: false })), 'warn');
+  assert.match(withdrawChecks({ ...fresh, destination: X, usedDestinations: [X], historyComplete: false }).find((c) => c.id === 'H3')!.text, /already sent/);
+  // complete history (or the default) keeps the clean result for a fresh destination
+  assert.equal(h3(withdrawChecks({ ...fresh, historyComplete: true })), 'ok');
+  assert.equal(h3(withdrawChecks(fresh)), 'ok');
+});

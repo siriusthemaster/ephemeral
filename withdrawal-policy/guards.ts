@@ -11,6 +11,7 @@ export type GuardInput = {
   payer?: Hex; // who sent the payment
   ownStealthAddresses: Hex[]; // every stealth address of ours we know about
   usedDestinations: Hex[]; // destinations that other payments of yours were withdrawn to (rebuilt from chain history, plus this session)
+  historyComplete?: boolean; // false while past withdrawals are loading or could not be read; default true
   receivedAt?: number; // ms
   isToken: boolean;
   hasGas: boolean;
@@ -46,6 +47,12 @@ export function withdrawChecks(g: GuardInput): Check[] {
       id: 'H3',
       level: 'warn',
       text: 'H3: you already sent another payment to this address. Collecting payments in one place links them.',
+    });
+  else if (g.historyComplete === false)
+    out.push({
+      id: 'H3',
+      level: 'warn',
+      text: 'H3: history incomplete. Past withdrawals could not be read, so this destination cannot be confirmed as unused.',
     });
   else out.push({ id: 'H3', level: 'ok', text: 'H3: a destination no other payment of yours went to.' });
 
