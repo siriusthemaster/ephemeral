@@ -1,41 +1,107 @@
-// Reference accounting for the Unbroken boost (Season 1). Unbroken is a tag on tokens, not on wallets.
-// Amounts are integers (token wei). Pure functions: the indexer applies the same steps to every $EPH Transfer.
+// Reference accounting for the Unbroken and First Light boosts, Season 1 (v3, 8 Oct 2026).
+// Both are about tokens, not wallets: each token carries the day it was bought, and whether it was bought in the
+// first hour (First Light).
+// - A buy adds tokens dated today.
+// - A sell removes tokens pro rata across their ages (no wallet-wide reset).
+// - A transfer moves tokens pro rata across their ages; they keep their dates in the new wallet.
+// - The boost on a token ramps from 0 to +1.00 over its first 7 days held.
+// - First Light: tokens bought in the launch hour carry +0.50, under the same pro-rata rules.
+// Every step is linear in the amounts, so splitting a wallet (before a sale or at any time) changes nothing.
+// Amounts are integers (token wei). Pure functions: the indexer applies the same steps to every $EPH transfer.
 
-export type Wallet = { balance: bigint; tagged: bigint }; // tagged <= balance always
+export const RAMP_DAYS = 7;
+
+/** Bucket key = acquisition day × 2 + (1 if bought in the launch hour). */
+export type Wallet = Map<number, bigint>;
+const dayOf = (k: number) => Math.floor(k / 2);
+const isFirstLight = (k: number) => k % 2 === 1;
 export type Ledger = Map<string, Wallet>;
 
-const get = (l: Ledger, w: string): Wallet => l.get(w.toLowerCase()) ?? { balance: 0n, tagged: 0n };
-const put = (l: Ledger, w: string, v: Wallet) => l.set(w.toLowerCase(), v);
+const key = (w: string) => w.toLowerCase();
+const wallet = (l: Ledger, w: string): Wallet => {
+  let x = l.get(key(w));
+  if (!x) l.set(key(w), (x = new Map()));
+  return x;
+};
+export const balanceOf = (l: Ledger, w: string) => [...(l.get(key(w)) ?? new Map()).values()].reduce((s, a) => s + a, 0n);
 
-/** A buy from the official pool: the bought tokens carry the tag. */
-export function buy(l: Ledger, w: string, amount: bigint): void {
-  const a = get(l, w);
-  put(l, w, { balance: a.balance + amount, tagged: a.tagged + amount });
+/** Takes `amount` out of a wallet pro rata across its days (rounding down), the rounding rest from the youngest days. */
+function take(src: Wallet, amount: bigint): Wallet {
+  const bal = [...src.values()].reduce((s, a) => s + a, 0n);
+  if (amount > bal) throw new Error('amount exceeds balance');
+  const out: Wallet = new Map();
+  if (amount === 0n) return out;
+  let moved = 0n;
+  for (const [d, a] of src) {
+    const m = (a * amount) / bal;
+    if (m > 0n) {
+      out.set(d, m);
+      moved += m;
+    }
+  }
+  let rest = amount - moved;
+  const youngestFirst = [...src.keys()].sort((x, y) => dayOf(y) - dayOf(x) || (isFirstLight(x) ? 1 : 0) - (isFirstLight(y) ? 1 : 0));
+  for (const d of youngestFirst) {
+    if (rest === 0n) break;
+    const left = src.get(d)! - (out.get(d) ?? 0n);
+    const m = left < rest ? left : rest;
+    if (m > 0n) {
+      out.set(d, (out.get(d) ?? 0n) + m);
+      rest -= m;
+    }
+  }
+  for (const [d, m] of out) {
+    const left = src.get(d)! - m;
+    if (left === 0n) src.delete(d);
+    else src.set(d, left);
+  }
+  return out;
 }
 
-/** A sell into a pool clears the tag on everything that wallet still holds. */
+export function buy(l: Ledger, w: string, amount: bigint, day: number, firstLight = false): void {
+  const x = wallet(l, w);
+  const k = day * 2 + (firstLight ? 1 : 0);
+  x.set(k, (x.get(k) ?? 0n) + amount);
+}
+
 export function sell(l: Ledger, w: string, amount: bigint): void {
-  const a = get(l, w);
-  if (amount > a.balance) throw new Error('sell exceeds balance');
-  put(l, w, { balance: a.balance - amount, tagged: 0n });
+  take(wallet(l, w), amount);
+}
+
+export function transfer(l: Ledger, from: string, to: string, amount: bigint): void {
+  if (key(from) === key(to)) return;
+  const moved = take(wallet(l, from), amount);
+  const dst = wallet(l, to);
+  for (const [d, m] of moved) dst.set(d, (dst.get(d) ?? 0n) + m);
 }
 
 /**
- * A transfer carries the sender's tagged share, pro rata, rounded down.
- * The sender keeps at most its new balance tagged, so tagged totals can only stay equal or shrink by rounding.
+ * Unbroken weight on `today`, exact and in "token-days, capped at 7": each day's tokens × min(age in days, 7).
+ * Linear in the amounts, so moving tokens never creates or destroys weight (no rounding at all).
  */
-export function transfer(l: Ledger, from: string, to: string, amount: bigint): void {
-  const a = get(l, from);
-  if (amount > a.balance) throw new Error('transfer exceeds balance');
-  if (from.toLowerCase() === to.toLowerCase()) return;
-  const moved = a.balance === 0n ? 0n : (amount * a.tagged) / a.balance;
-  const fromBalance = a.balance - amount;
-  let fromTagged = a.tagged - moved;
-  if (fromTagged > fromBalance) fromTagged = fromBalance;
-  put(l, from, { balance: fromBalance, tagged: fromTagged });
-  const b = get(l, to);
-  put(l, to, { balance: b.balance + amount, tagged: b.tagged + moved });
+export function weight7(l: Ledger, w: string, today: number): bigint {
+  let s = 0n;
+  for (const [k, a] of l.get(key(w)) ?? new Map<number, bigint>()) s += a * BigInt(Math.min(RAMP_DAYS, Math.max(0, today - dayOf(k))));
+  return s;
 }
 
-export const totalTagged = (l: Ledger) => [...l.values()].reduce((s, w) => s + w.tagged, 0n);
-export const totalBalance = (l: Ledger) => [...l.values()].reduce((s, w) => s + w.balance, 0n);
+/** Tokens the wallet holds that were bought in the launch hour (they carry First Light, +0.50). */
+export function firstLightTokens(l: Ledger, w: string): bigint {
+  let s = 0n;
+  for (const [k, a] of l.get(key(w)) ?? new Map<number, bigint>()) if (isFirstLight(k)) s += a;
+  return s;
+}
+
+/** Tokens counted as Unbroken on `today` (token wei): weight7 / 7. */
+export const seasoned = (l: Ledger, w: string, today: number) => weight7(l, w, today) / BigInt(RAMP_DAYS);
+
+/** The wallet's Unbroken boost on `today`: +1.00 × seasoned / balance (0 to 1.00). */
+export function unbrokenBoost(l: Ledger, w: string, today: number): number {
+  const bal = balanceOf(l, w);
+  return bal === 0n ? 0 : Number((weight7(l, w, today) * 10_000n) / (bal * BigInt(RAMP_DAYS))) / 10_000;
+}
+
+export const totalFirstLight = (l: Ledger) => [...l.keys()].reduce((s, w) => s + firstLightTokens(l, w), 0n);
+export const totalWeight7 = (l: Ledger, today: number) => [...l.keys()].reduce((s, w) => s + weight7(l, w, today), 0n);
+export const totalSeasoned = (l: Ledger, today: number) => totalWeight7(l, today) / BigInt(RAMP_DAYS);
+export const totalBalance = (l: Ledger) => [...l.keys()].reduce((s, w) => s + balanceOf(l, w), 0n);

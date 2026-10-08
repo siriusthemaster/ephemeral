@@ -2,14 +2,16 @@
 
 Points for $EPH holders. Season 1: 15 Oct 2026 14:00 UTC to 13 Jan 2027 (90 days). Draft; final at launch.
 
-Changes 8 Oct (after review by Claus Lab): Unbroken is now a tag on tokens, not on wallets. Moving to a safer wallet costs nothing, and tokens from a wallet that sold cannot regain it.
+Changes 8 Oct, reviewed in public by Claus Lab:
+- v2: Unbroken moved from wallets to tokens, so moving to a safer wallet costs nothing.
+- v3: Claus Lab found that v2's wallet-wide reset on a sale could be dodged by moving a few tokens to a side wallet and selling there (the rest kept the boost). v3 drops wallet-wide resets entirely. Unbroken and First Light now follow each token's own history, and every step (buy, sell, transfer) is pro rata. Splitting before a sale gives exactly the same result as selling directly.
 
 ## Formula
 ```
 Phases per wallet = Σ_days  base × tier × (1 + boosts)  +  trading Phases
 base          = $EPH held ÷ 1,000 per day, from hourly balance snapshots (time-weighted)
 tier          = step-up by share of the 1,000,000,000 supply held (table)
-boosts        = sum of the boosts the wallet has (table), 0 to 2.0; Unbroken counts only on the wallet's Unbroken tokens
+boosts        = sum of the boosts the wallet has (table), 0 to 2.0; Unbroken and First Light count on the share of the wallet's tokens that carry them
 trading Phases = 100 per 0.001 ETH of swap fees the wallet paid on the official pool
 ```
 
@@ -27,8 +29,8 @@ trading Phases = 100 per 0.001 ETH of swap fees the wallet paid on the official 
 | --- | --- | --- |
 | Stealth keys | +0.25 | stealth keys set up in the ephemeral app (pay link or ERC-6538 registry) |
 | Private payment | +0.25 | sent or received at least one ephemeral payment |
-| First Light | +0.50 | bought in the first hour and still holds at least that amount; kept in later seasons |
-| Unbroken | +1.00 | a tag on tokens: tokens bought carry it; a sell from a wallet clears it on everything that wallet holds; a transfer carries it pro rata (amount × the sender's Unbroken share) |
+| First Light | +0.50 | on tokens bought in the launch hour; they keep it when moved; a sale removes it pro rata; kept in later seasons |
+| Unbroken | +1.00 | on tokens held without being sold: ramps from 0 to +1.00 over a token's first 7 days; tokens keep their age when moved; a sale removes tokens pro rata across their ages; rebought tokens start at day 0 |
 
 ## Rewards at the end of the season
 - **$TIDE airdrop:** 20% of $TIDE supply, pro rata by Phases.
@@ -38,17 +40,18 @@ trading Phases = 100 per 0.001 ETH of swap fees the wallet paid on the official 
 - base is linear in tokens × time, so splitting is neutral on base;
 - the tier multiplier never decreases with balance, so every part of a split sits in the same tier or a lower one;
 - boosts multiply each wallet's own base, so more wallets do not add boost;
-- Unbroken travels with the tokens, pro rata, so a split or a move to a safer wallet neither gains nor loses it, and tokens sent by a wallet that sold arrive without it;
+- Unbroken and First Light travel with the tokens, pro rata, and a sale removes tokens pro rata too, so splitting (before a sale or at any time) and moving to a safer wallet neither gain nor lose anything;
 - presale and airdrop are pro rata by Phases, not per wallet or per Pass.
 
 So a split can tie or lose, never win. If you find a sequence that wins, open an issue.
 
 ## Probes answered
-- *Tiny buy in a fresh wallet, then transfer in tokens from a wallet that has sold* (Claus Lab, 8 Oct): only the tiny buy carries Unbroken. The incoming tokens lost the tag when their old wallet sold, so they arrive without it.
-- *Sell, rebuy, move everything to a fresh wallet:* the sell cleared the tag on what was held; only the rebought tokens carry it, in the old wallet and after the move.
+- *Split before a sale* (Claus Lab, 8 Oct, against v2): move 1,000 of 100,000 to a side wallet and sell there. In v3 that equals selling 1,000 directly: the 99,000 left keep their age either way. Test: `Claus Lab finding (v2 split-before-sale)`.
+- *Tiny buy in a fresh wallet, then transfer in tokens from a wallet that has sold* (Claus Lab, 8 Oct): every token keeps its own age, so the move neither adds nor removes Unbroken weight; the tiny buy starts at day 0.
+- *Sell, rebuy, move everything:* the sold tokens are gone; the rebought ones start at day 0 and take 7 days to reach the full boost.
 
 ## Reference code
-`unbroken.ts` is the Unbroken accounting the indexer runs on every $EPH transfer; `unbroken.test.ts` checks it, including random chains of thousands of tiny transfers between tagged and untagged balances (tagged totals never grow from moving tokens). Run: `node --experimental-strip-types --test unbroken.test.ts` (Node 22+).
+`unbroken.ts` is the Unbroken and First Light accounting the indexer runs on every $EPH transfer; `unbroken.test.ts` checks it: Claus Lab's split-before-sale case, and random chains of thousands of tiny transfers between mixed-age balances (the Unbroken weight, the First Light total and the supply stay exactly the same when tokens move; splitting before a sale never beats selling directly). Run: `node --experimental-strip-types --test unbroken.test.ts` (Node 22+).
 
 ## Known trade-offs
 - Trading Phases are bought with fees (0.001 ETH for 100). Wash trading earns Phases at that price; the fees go to the treasury.
