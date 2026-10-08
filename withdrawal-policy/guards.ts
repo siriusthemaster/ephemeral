@@ -10,7 +10,7 @@ export type GuardInput = {
   walletAddress?: Hex; // the wallet that signed the keys (and maybe registered them)
   payer?: Hex; // who sent the payment
   ownStealthAddresses: Hex[]; // every stealth address of ours we know about
-  usedDestinations: Hex[]; // destinations used for other payments in this session
+  usedDestinations: Hex[]; // destinations that other payments of yours were withdrawn to (rebuilt from chain history, plus this session)
   receivedAt?: number; // ms
   isToken: boolean;
   hasGas: boolean;
@@ -73,3 +73,21 @@ export function withdrawChecks(g: GuardInput): Check[] {
 
 export const blocking = (c: Check[]) => c.some((x) => x.level === 'block');
 export const warnings = (c: Check[]) => c.filter((x) => x.level === 'warn');
+
+/**
+ * Past withdrawal destinations from public chain history: where your own stealth addresses sent funds. Feed the
+ * result into `usedDestinations`, so H3 still knows a collector after a reload or on another device. Transfers from
+ * addresses that are not yours are ignored; transfers between your own addresses are left out (H3 already flags
+ * those as merges). Unique and lowercased.
+ */
+export function destinationsFromHistory(own: Hex[], history: { from: string; to: string }[]): Hex[] {
+  const mine = new Set(own.map((a) => a.toLowerCase()));
+  const out = new Set<string>();
+  for (const t of history) {
+    const from = typeof t?.from === 'string' ? t.from.toLowerCase() : '';
+    const to = typeof t?.to === 'string' ? t.to.toLowerCase() : '';
+    if (!/^0x[0-9a-f]{40}$/.test(to) || !mine.has(from) || mine.has(to)) continue;
+    out.add(to);
+  }
+  return [...out] as Hex[];
+}

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { withdrawChecks, blocking, warnings } from './guards.ts';
+import { getAddress, type Hex } from 'viem';
+import { withdrawChecks, blocking, warnings, destinationsFromHistory } from './guards.ts';
 
 const base = {
   stealthAddress: '0x1111111111111111111111111111111111111111',
@@ -41,4 +42,52 @@ test('a fresh destination after an hour passes clean', () => {
 test('timing warns within the first hour', () => {
   const c = withdrawChecks({ ...base, destination: '0x6666666666666666666666666666666666666666', receivedAt: Date.now() - 60_000, ownStealthAddresses: [...base.ownStealthAddresses], usedDestinations: [...base.usedDestinations] });
   assert.equal(warnings(c)[0].id, 'time');
+});
+
+// ------------------------------------------------------------------ H3 across reloads (rebuilt from chain history)
+
+const S1 = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as Hex; // payment A
+const S2 = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as Hex; // payment B
+const X = '0xcccccccccccccccccccccccccccccccccccccccc' as Hex; // the collector
+const Y = '0xdddddddddddddddddddddddddddddddddddddddd' as Hex;
+const h3 = (c: ReturnType<typeof withdrawChecks>) => c.find((x) => x.id === 'H3')!.level;
+const checksFor = (stealthAddress: Hex, destination: string, usedDestinations: Hex[]) =>
+  withdrawChecks({ ...base, stealthAddress, destination, ownStealthAddresses: [S1, S2], usedDestinations });
+
+test('a reused collector stays flagged after reopening the wallet', () => {
+  // session 1: payment A (S1) goes to X, which is fine the first time; the session remembers X
+  let session: Hex[] = [];
+  assert.equal(h3(checksFor(S1, X, session)), 'ok');
+  session = [...session, X];
+  assert.equal(h3(checksFor(S2, X, session)), 'warn');
+  // reopen: session state is gone; without history H3 would wrongly pass
+  session = [];
+  assert.equal(h3(checksFor(S2, X, session)), 'ok');
+  // with history rebuilt from the chain, payment B (S2) to X is flagged again
+  const used = [...destinationsFromHistory([S1, S2], [{ from: S1, to: X }]), ...session];
+  assert.equal(h3(checksFor(S2, X, used)), 'warn');
+  assert.equal(h3(checksFor(S2, Y, used)), 'ok');
+});
+test('history: transfers from addresses that are not ours are ignored', () => {
+  assert.deepEqual(destinationsFromHistory([S1], [{ from: base.payer, to: X }, { from: Y, to: S1 }]), []);
+});
+test('history: case-insensitive', () => {
+  const got = destinationsFromHistory([getAddress(S1)], [
+    { from: S1.toUpperCase().replace('0X', '0x'), to: getAddress(X) },
+    { from: getAddress(S1), to: X },
+  ]);
+  assert.deepEqual(got, [X]);
+  assert.equal(h3(checksFor(S2, getAddress(X), got)), 'warn');
+});
+test('history: transfers between our own addresses are left out', () => {
+  assert.deepEqual(destinationsFromHistory([S1, S2], [{ from: S1, to: S2 }, { from: S2, to: getAddress(S1) }]), []);
+});
+test('history: duplicates collapse', () => {
+  const got = destinationsFromHistory([S1, S2], [
+    { from: S1, to: X },
+    { from: S2, to: X },
+    { from: S1, to: X },
+    { from: S2, to: Y },
+  ]);
+  assert.deepEqual([...got].sort(), [X, Y]);
 });
