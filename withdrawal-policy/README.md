@@ -21,3 +21,5 @@ npm i viem && node --experimental-strip-types --test guards.test.ts
 ```
 
 Study and numbers: the leak study in this repo. MIT.
+
+`history.ts` loads those past sends from Blockscout's public API. It compares each address's on-chain nonce with the transactions the explorer has indexed: if the explorer is behind (a withdrawal made minutes ago is not indexed yet), history counts as incomplete and H3 says so. Found on mainnet on 8 Oct: a second payment was withdrawn to the same fresh address a few minutes after the first, and H3 did not warn. Likely cause: the explorer had not indexed the first withdrawal yet. Fixes: the nonce check above (`history.test.ts` covers it), and the client now records a destination as soon as a token leaves, even if the leftover-ETH step fails.
