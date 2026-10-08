@@ -2,14 +2,14 @@
 
 Points for $EPH holders. Season 1: 15 Oct 2026 14:00 UTC to 13 Jan 2027 (90 days). Draft; final at launch.
 
-Change 8 Oct: Unbroken no longer resets on any transfer out, so moving to a safer wallet costs nothing (thanks to Claus Lab for the review).
+Changes 8 Oct (after review by Claus Lab): Unbroken is now a tag on tokens, not on wallets. Moving to a safer wallet costs nothing, and tokens from a wallet that sold cannot regain it.
 
 ## Formula
 ```
 Phases per wallet = Σ_days  base × tier × (1 + boosts)  +  trading Phases
 base          = $EPH held ÷ 1,000 per day, from hourly balance snapshots (time-weighted)
 tier          = step-up by share of the 1,000,000,000 supply held (table)
-boosts        = sum of the boosts the wallet has (table), 0 to 2.0; Unbroken counts only on the wallet's lowest balance since it first received $EPH
+boosts        = sum of the boosts the wallet has (table), 0 to 2.0; Unbroken counts only on the wallet's Unbroken tokens
 trading Phases = 100 per 0.001 ETH of swap fees the wallet paid on the official pool
 ```
 
@@ -28,7 +28,7 @@ trading Phases = 100 per 0.001 ETH of swap fees the wallet paid on the official 
 | Stealth keys | +0.25 | stealth keys set up in the ephemeral app (pay link or ERC-6538 registry) |
 | Private payment | +0.25 | sent or received at least one ephemeral payment |
 | First Light | +0.50 | bought in the first hour and still holds at least that amount; kept in later seasons |
-| Unbroken | +1.00 | on the tokens a wallet never let go of: its lowest balance since it first received $EPH. Selling or sending out costs the boost only on that amount; tokens received start their own count in the new wallet |
+| Unbroken | +1.00 | a tag on tokens: tokens bought carry it; a sell from a wallet clears it on everything that wallet holds; a transfer carries it pro rata (amount × the sender's Unbroken share) |
 
 ## Rewards at the end of the season
 - **$TIDE airdrop:** 20% of $TIDE supply, pro rata by Phases.
@@ -38,10 +38,14 @@ trading Phases = 100 per 0.001 ETH of swap fees the wallet paid on the official 
 - base is linear in tokens × time, so splitting is neutral on base;
 - the tier multiplier never decreases with balance, so every part of a split sits in the same tier or a lower one;
 - boosts multiply each wallet's own base, so more wallets do not add boost;
-- Unbroken is linear too: it sits on each wallet's lowest balance, so moving tokens to a safer wallet neither gains nor loses it;
+- Unbroken travels with the tokens, pro rata, so a split or a move to a safer wallet neither gains nor loses it, and tokens sent by a wallet that sold arrive without it;
 - presale and airdrop are pro rata by Phases, not per wallet or per Pass.
 
 So a split can tie or lose, never win. If you find a sequence that wins, open an issue.
+
+## Probes answered
+- *Tiny buy in a fresh wallet, then transfer in tokens from a wallet that has sold* (Claus Lab, 8 Oct): only the tiny buy carries Unbroken. The incoming tokens lost the tag when their old wallet sold, so they arrive without it.
+- *Sell, rebuy, move everything to a fresh wallet:* the sell cleared the tag on what was held; only the rebought tokens carry it, in the old wallet and after the move.
 
 ## Known trade-offs
 - Trading Phases are bought with fees (0.001 ETH for 100). Wash trading earns Phases at that price; the fees go to the treasury.
