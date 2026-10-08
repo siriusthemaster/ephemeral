@@ -47,6 +47,9 @@ So a split can tie or lose, never win. If you find a sequence that wins, open an
 - *Tiny buy in a fresh wallet, then transfer in tokens from a wallet that has sold* (Claus Lab, 8 Oct): only the tiny buy carries Unbroken. The incoming tokens lost the tag when their old wallet sold, so they arrive without it.
 - *Sell, rebuy, move everything to a fresh wallet:* the sell cleared the tag on what was held; only the rebought tokens carry it, in the old wallet and after the move.
 
+## Reference code
+`unbroken.ts` is the Unbroken accounting the indexer runs on every $EPH transfer; `unbroken.test.ts` checks it, including random chains of thousands of tiny transfers between tagged and untagged balances (tagged totals never grow from moving tokens). Run: `node --experimental-strip-types --test unbroken.test.ts` (Node 22+).
+
 ## Known trade-offs
 - Trading Phases are bought with fees (0.001 ETH for 100). Wash trading earns Phases at that price; the fees go to the treasury.
 - Hourly snapshots: holding for a few hours earns a few hours of base, nothing more.
