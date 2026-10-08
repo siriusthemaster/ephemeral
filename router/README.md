@@ -24,5 +24,22 @@ forge test -vv      # 11 tests
 ```
 On fresh v4-core pools (no dependency on any other ephemeral contract): delivery to the stealth address with gas and exact accounting (fuzzed), ERC-5564 announcement format, slippage guard, input checks, token/token pools rejected, re-entrancy from the stealth address and from the buyer's refund, exact refund on a partial fill, hooks that take a token-side fee (the announced amount is what arrived) or try to leave the caller owed ETH (reverts).
 
+## Receiver test (e2e)
+The receiving side, end to end, with real keys: `e2e/receiver.e2e.ts`. It proves the receiver can **find** a StealthBuy payment and **spend** it using only the gas bundled in the buy, with no top-up from any known wallet.
+
+1. The receiver signs the key message with an account and derives ERC-5564 scheme-1 spending and viewing keys and a meta-address (`e2e/stealth.ts`).
+2. A buyer, knowing only that meta-address, generates a stealth address and calls `buy` with a 0.05 ETH swap and a 0.001 ETH tip (plus a decoy buy for someone else). The stealth address has 0 ETH and nonce 0 before.
+3. The receiver scans the Announcer's `Announcement` logs with its viewing key (view tag, then the address check) and finds exactly its payment; token and amount come from the 57-byte metadata.
+4. With the derived stealth private key it sends all tokens to a brand-new address, then the leftover ETH, with the fee price set so the cost fits inside the tip. The stealth address ends at exactly 0 ETH.
+5. Audit: every call frame of every block since setup is traced (`trace_block`). The only ETH that ever reached the stealth address is the tip, sent by the router inside the buy transaction; no transaction was ever sent to it.
+
+It runs on a local anvil chain only (chain id 31337), against plain Uniswap v4: `script/LocalSetup.s.sol` deploys a fresh v4-core PoolManager, a mock token, a native-ETH/token pool without a hook, the Announcer code at its canonical address, and StealthBuy. No key is stored anywhere; anvil's unlocked accounts sign.
+```
+./setup.sh                      # once: lib/ (forge-std, v4-core)
+cd e2e && npm i && cd ..        # once: viem, @noble/curves, tsx
+e2e/run.sh                      # starts anvil on a free port, sets up, runs the test, stops anvil
+```
+`RPC_URL=http://127.0.0.1:8545 e2e/run.sh` uses an anvil you already run instead.
+
 ## Status
 Unaudited and not deployed yet. Deploy script: `script/DeployStealthBuy.s.sol` (mainnet PoolManager `0x000000000004444c5dc75cB358380D2e3dE08A90`). Issues and PRs welcome. MIT.

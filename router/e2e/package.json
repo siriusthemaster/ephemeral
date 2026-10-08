@@ -1,0 +1,21 @@
+{
+  "name": "stealthbuy-receiver-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Receiver test for StealthBuy on a local anvil chain: discover with the viewing key, spend with only the bundled gas tip.",
+  "scripts": {
+    "test": "./run.sh"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
+    "viem": "^2.57.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15"
+  }
+}
