@@ -135,3 +135,82 @@ export function analyzeExactAmounts(amounts: bigint[]): { holders: number; alone
   const crowds = paid.map((a) => n.get(a)!);
   return { holders: paid.length, alone: crowds.filter((c) => c === 1).length, crowd: { min: Math.min(...crowds), median: median(crowds) } };
 }
+
+// ---------------------------------------------------------------- per holder (answers "show guessing success per holder, not just the average")
+//
+// The average above (bestGuessRate) hides who carries the risk. Per holder, against the best observer that targets
+// THAT holder (knows the holder's public pattern m_k = how many notes of denomination k they got, and C_k = how many
+// notes of k the batch has):
+// - noteSuccess: the expected share of the holder's notes the observer attributes correctly. Within a denomination the
+//   notes are interchangeable to anyone without the holder's viewing key (fresh addresses from fresh random ephemeral
+//   keys, sorted by address), so every note of k is the holder's with probability m_k / C_k and no strategy does better:
+//   sum_k m_k * (m_k / C_k) / n.
+// - exposedNote: the holder's most exposed note, max_k m_k / C_k.
+// - setSuccess: the probability of recovering the holder's whole note set for the epoch, prod_k 1 / C(C_k, m_k) = 2^-bits.
+// Both are exact (checked against enumeration of every assignment in notes-epochs.test.ts).
+
+export type Spread = { min: number; p10: number; median: number; p90: number; max: number };
+
+/** min / p10 / median / p90 / max, linear interpolation between order statistics (the median of an even count is the mean of the two middle values). */
+export function spread(xs: number[]): Spread {
+  if (xs.length === 0) throw new Error('spread of nothing');
+  const s = [...xs].sort((a, b) => a - b);
+  const q = (p: number) => {
+    const h = (s.length - 1) * p;
+    const lo = Math.floor(h);
+    const hi = Math.ceil(h);
+    return s[lo] + (s[hi] - s[lo]) * (h - lo);
+  };
+  return { min: s[0], p10: q(0.1), median: q(0.5), p90: q(0.9), max: s[s.length - 1] };
+}
+
+export type HolderSuccess = {
+  owner: Address;
+  units: bigint;
+  notes: number;
+  pattern: { exponent: number; mine: number; groupNotes: number; groupHolders: number }[]; // ascending exponent
+  noteSuccess: number;
+  exposedNote: { exponent: number; share: number };
+  setSuccess: number;
+  bits: number;
+};
+
+/** Per-holder guessing success for one epoch (paid holders only; a holder owed less than one base unit has no note). */
+export function holderSuccess(batch: ExpectedBatch): HolderSuccess[] {
+  const C = new Map(batch.groups.map((g) => [g.exponent, g]));
+  const out: HolderSuccess[] = [];
+  for (const [owner, p] of batch.perOwner) {
+    if (p.exponents.length === 0) continue;
+    const m = new Map<number, number>();
+    for (const k of p.exponents) m.set(k, (m.get(k) ?? 0) + 1);
+    const pattern = [...m]
+      .sort((a, b) => a[0] - b[0])
+      .map(([exponent, mine]) => ({ exponent, mine, groupNotes: C.get(exponent)!.count, groupHolders: C.get(exponent)!.holders }));
+    let hits = 0;
+    let bits = 0;
+    let exposedNote = { exponent: -1, share: 0 };
+    for (const g of pattern) {
+      const share = g.mine / g.groupNotes;
+      hits += g.mine * share;
+      bits += log2Binom(g.groupNotes, g.mine);
+      if (share > exposedNote.share) exposedNote = { exponent: g.exponent, share };
+    }
+    out.push({ owner, units: p.units, notes: p.exponents.length, pattern, noteSuccess: hits / p.exponents.length, exposedNote, setSuccess: 2 ** -bits, bits });
+  }
+  return out;
+}
+
+/** Why a holder is exposed, in words (for the worst-holders list). */
+export function whyExposed(h: HolderSuccess, kmax: number): string {
+  const units = (k: number) => `${2 ** k}u`;
+  const parts = h.pattern.map((g) => `${g.mine}x${units(g.exponent)}`).join(' + ');
+  const worst = h.pattern.find((g) => g.exponent === h.exposedNote.exponent)!;
+  const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
+  const where =
+    worst.mine > 1 && worst.exponent === kmax
+      ? `above the cap: ${worst.mine} of the ${worst.groupNotes} top (${units(kmax)}) notes, a group only ${worst.groupHolders} holders share`
+      : worst.exponent === kmax
+        ? `its ${units(kmax)} note is 1 of ${worst.groupNotes} in the top group (${worst.groupHolders} holders), the smallest crowd`
+        : `its ${units(worst.exponent)} note is 1 of ${worst.groupNotes}`;
+  return `${h.units} units = ${parts}; ${where} (${pct(h.exposedNote.share)} per such note)`;
+}

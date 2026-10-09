@@ -17,6 +17,8 @@ An AI-agent token pays ETH rewards every day to the owners of about 195 NFT vaul
 3. *"Sorted payments avoid leaking NFT order. But my rewards follow holding time, including previous owners. Grouping
    exact amounts can leave one holder identifiable. The root also trusts the payer's mapping. The next toy needs to
    preserve unequal debts without exposing them."* (9 Oct, 06:40 UTC). Answered by [v2](#v2-unequal-debts-denomination-notes).
+4. *"Show guessing success per holder, not just the 3.1% average. Include carry across epochs too, and report payment
+   delays alongside privacy gains."* Answered in [per holder, across epochs, delay](#per-holder-across-epochs-and-what-rounding-costs).
 
 ## The answer in one paragraph
 
@@ -232,7 +234,7 @@ ledger published only totals, the chain would show a histogram of notes per deno
 | --- | --- | --- | --- | --- |
 | Each holder's debt | yes (public ledger, as before) | yes | yes | yes |
 | Notes per denomination | yes, and it is implied by the ledger anyway | yes | yes | yes: checks it equals what the ledger implies |
-| Which holder a note belongs to | **no**: one of >= 31 holders (fixture), best guess right 3.1% of the time | its own | only the shown holder's | no |
+| Which holder a note belongs to | **no**: one of >= 31 holders (fixture); per holder the best observer is right 1.3% of the time at the median, 14.8% for the 16-NFT holder ([below](#per-holder-across-epochs-and-what-rounding-costs)), as long as notes of different epochs never meet | its own | only the shown holder's | no |
 | That the epoch paid exactly the ledger | yes (it can run the audit) | yes | yes | **yes**: declared total on chain == ledger, every denomination count == ledger (`auditNotesEpoch`) |
 | That my notes settled exactly my debt | no | yes (`findMyNotes`: `complete`) | **yes** (`verifyDebtSettled`) | no |
 | That every note went to the right holder | no | only its own | only the shown holder's | **no**: needs the ZK statement below |
@@ -253,7 +255,8 @@ during the epoch and are owed their share of the day: 200 ledger lines, debts fr
 - **crowd**: a note of denomination k could be any of the distinct holders who got a k note; per holder, the smallest
   crowd among their notes. Without the cap: min 1. With exact amounts: 109 holders alone.
 - **bits**: log2 of the candidate note sets for a holder given their (public) pattern, `prod_k C(C_k, m_ik)`.
-- **best guess**: the share of notes an optimal observer attributes to the right holder.
+- **best guess**: the share of all notes an observer gets right when it labels every note with its most likely holder
+  (the biggest holder of that denomination). An average over notes: per holder, see the next section.
 - The rule-agnostic count asked for, subsets of the batch that add up to a holder's payout, is min 2^5.8, median
   2^39.1 at 1e14 (`log2SubsetsSumming`, checked against brute force). It overstates the protection: the rule is public,
   so the observer knows each holder's pattern. Use crowd and bits.
@@ -264,6 +267,78 @@ during the epoch and are owed their share of the day: 200 ledger lines, debts fr
 - **Carry**: over 30 simulated epochs with daily sales and new buyers (244 owners), every owner's cumulative
   `paid + carry == cumulative debt` to the wei, carry < base at every step, and every denomination of every epoch was
   shared by >= 20 holders.
+
+### Per holder, across epochs, and what rounding costs
+
+> "Show guessing success per holder, not just the 3.1% average. Include carry across epochs too, and report payment
+> delays alongside privacy gains." (@contractclaus)
+
+Code: `ts/notes-anonymity.ts` (`holderSuccess`), `ts/notes-epochs.ts` (`successOverRun`, `linkedSuccess`,
+`paymentDelays`), tests in `ts/notes-epochs.test.ts`. Reproduce: `node --experimental-strip-types notes-fixture.ts holders`
+and `... epochs`.
+
+**Per holder, one epoch** (200-holder world, base 1e14, the 178 holders paid). The observer targets one holder and knows
+their public pattern: `m_k` notes of denomination k, among the `C_k` notes of k in the batch. Within a denomination the
+notes are interchangeable without the holder's viewing key, so each is theirs with probability `m_k / C_k` and no
+strategy does better (checked against an enumeration of every assignment and every observer choice).
+
+| | min | p10 | median | p90 | max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Per note: share of the holder's notes the best observer attributes correctly | 0.9% | 1.0% | **1.3%** | 2.0% | **14.8%** |
+| Most exposed note, `max_k m_k / C_k` | 0.9% | 1.1% | 1.8% | 2.4% | 16.7% |
+| Whole note set recovered, `prod_k 1 / C(C_k, m_k)` | 2^-30.5 | 2^-18.3 | 2^-12.7 | 1.8% | 2.4% |
+
+| Most exposed holders | Per note | Why |
+| --- | ---: | --- |
+| owner #0 (16 NFTs) | 14.8% | 113 units = 1x1u + 7x16u: **7 of the 42 top (16u) notes**, a group only 31 holders share |
+| owner #3 (6 NFTs) | 5.8% | 49 units = 1x1u + 3x16u: 3 of the 42 top notes |
+| owner #8 (4 NFTs) | 3.5% | 34 units = 1x2u + 2x16u: 2 of the 42 top notes |
+| owner #2 (7 NFTs) | 3.1% | 38 units = 1x2u + 1x4u + 2x16u |
+| owner #4 (5 NFTs) | 2.9% | 42 units = 1x2u + 1x8u + 2x16u |
+
+- The 3.1% average hid a tail, and the tail is the top denomination: all five are above the cap with several top notes.
+  A crowd of >= 20 holders does not bound the risk per note at 1/20; the holder's share of the group's **notes** does.
+- Whole sets go the other way: the 16-NFT holder's 8 notes are the hardest set to recover (2^-30.5); the easiest is a
+  single 16u note (1 in 42).
+- If the tail matters: one step lower cap (8u top) puts the 16-NFT holder at 7.5% for 401 notes instead of 359. A rule
+  "no holder above x% of any denomination" could pick the cap; not implemented.
+
+**Across epochs** (30 epochs of the world with carry, 2 to 6 sales a day, 244 owners, base 1e14). Cells: median / p90 of
+the probability the observer puts on the right holder; "named": holders with no other candidate left.
+
+| What links the epochs | 1 epoch | 3 | 10 | 30 |
+| --- | ---: | ---: | ---: | ---: |
+| Nothing: every note spent on its own (per-note success, as above) | 1.3% / 2.0% | 1.2% / 1.7% | 1.2% / 1.7% | 1.1% / 1.6% |
+| Carry schedule: one destination, only *which epochs* it received something | 0.6% / 0.6% | 0.6% / 11% | 0.6% / 50%, 16 named | 0.7% / 100%, 43 of 238 named |
+| Recurring denominations: one random note per paid epoch to one destination | 1.4% / 3.2% | 7.7% / 30% | **65%** / 100%, 46 named | **100%**, 172 of 238 named |
+| Merged totals: every epoch's notes swept to one destination (H3 broken daily) | 8.3% / 50%, 9 named | 33% / 100% | 100%, 139 named | 100%, 204 of 238 named |
+
+- **Without a link, more epochs give nothing.** Every note goes to a fresh address from a fresh random ephemeral key, so
+  the epochs' assignments are independent. Carries and recurring patterns are functions of the public ledger, which
+  the observer already has; they tie no note to another.
+- **With a link, success rises fast.** A holder whose notes of different epochs meet (one sweep wallet, one exchange
+  deposit address) is fingerprinted by the sequence: the carry decides in which epochs a small holder is paid at all,
+  and a stable debt repeats its pattern. H1-H3 therefore hold **across epochs**: notes of different epochs must never
+  share a destination. (Unequal debts are what make the sequence a fingerprint: with v1's equal payments, every holder
+  is paid the same amount every epoch, so one payment per epoch to one place shows only that its owner holds an NFT.)
+
+**Payment delay vs privacy** (same 30 epochs). Each wei of debt waits from the epoch it accrues to the epoch a note pays
+it (first in, first out). In wei, what waits is the carry, always below one base unit.
+
+| Base unit | Notes / epoch | Per note over 30 epochs: median / max holder | Merged totals unique (epoch 0) | 10 linked epochs (one note each): median | Delay per holder, epochs (wei-weighted mean): median / p90 / max | Longest wait while accruing | Carry per holder: median of means / max |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1e13 wei | 723 | 1.1% / 7.8% | 60 of 199 | 70% | 0.00 / 0.03 / 0.16 | 1 epoch | 0.0000049 / < 0.00001 ETH |
+| **1e14 wei** | **385** | **1.1% / 10.9%** | **9 of 178** | **65%** | **0.05 / 0.25 / 1.07** | **5** (15 holders > 1) | **0.000049 / < 0.0001 ETH** |
+| 1e15 wei | 151 | 0.9% / 9.8% | 1 of 102 | 33% | 0.41 / 2.17 / 5.28 | 18 (156 holders > 1) | 0.00047 / < 0.001 ETH |
+
+- A coarser unit buys a smaller merge leak and slower linking, and fewer notes (gas). It does **not** lower per-note
+  success: that is set by the holder's share of the top group, which the cap decides.
+- It costs delay: at 1e14 about 5% of the median holder's debt waits one more epoch; the smallest holders (owed less
+  than a unit a day) wait up to `ceil((base - 1) / their smallest epoch debt)` epochs (tested). At 1e15 only 102 of the
+  200 holders are paid in epoch 0.
+- Owners who stop accruing (sold everything) keep their carry until they accrue again: up to 29 epochs in this run. The
+  payer holds back about half a unit per owner: 0.012 ETH at 1e14 (6% of a day's pool), 0.12 ETH at 1e15.
+- 1e14 stays the default: a 0.05-epoch median delay for 9 unique merged totals instead of 60.
 
 ### The root still trusts the payer's mapping: what is checkable without ZK, and what is not
 
@@ -306,8 +381,14 @@ holder's notes of the epoch (needed for the sum) and the owner wallet; the proof
   ledger names: at 1e14, 9 of 178 paid holders have a unique total, the median is shared by 12. Merging any two notes
   intersects their crowds. Spend notes **separately** (each is a standard amount and can pay as is), or send each through
   the withdrawal policy on its own; never sweep a day's notes into one address.
+- **Notes of different epochs must never meet.** Unlinked, more epochs give an observer nothing; linked through one
+  destination, the sequence names the median holder at 65% after 10 epochs and outright after 30 (one note per epoch),
+  or after 10 if every epoch is merged. The carry schedule alone names 43 of 238 holders in 30 epochs.
 - **Denominations are visible.** A note narrows its owner to the holders who got that denomination; the top one is
-  whale-heavy (17% one holder in the fixture). The anonymity is bounded by how unequal the debts are.
+  whale-heavy (17% one holder in the fixture): that holder's notes are attributed correctly 14.8% of the time, against
+  a median of 1.3%. The anonymity is bounded by how unequal the debts are.
+- **Rounding delays payment.** At 1e14 the median holder's mean delay is 0.05 epoch; the smallest holders wait up to 5
+  epochs, an owner who stops accruing keeps up to one unit until they accrue again.
 - **Debts stay public** where the ledger publishes them; v2 hides the link, not the amounts owed.
 - **Parts are not atomic.** If the payer stops between parts, `outstanding > 0` is public, and address uniqueness across
   parts in different transactions is checked off chain (the planner), not by the contract.
@@ -360,9 +441,10 @@ ts/proof.ts                    v1 leaves, Merkle tree, proveEntitlement / verify
 ts/notes.ts                    v2 rule (roundDown, topExponent, decompose, expectedBatch, withCarries), planNotesEpoch,
                                splitParts, settleNotesCalldata, findMyNotes, auditNotesEpoch
 ts/notes-proof.ts              v2 proveDebtSettled / verifyDebtSettled
-ts/notes-anonymity.ts          v2 observer metrics (crowd, bits, subset count, best guess, merge leak)
-ts/notes-fixture.ts            v2 worlds (200 holders, 30-epoch history, the 7-owner fixture) and the report
-ts/*.test.ts                   27 tests (node:test): 13 v1, 14 v2
+ts/notes-anonymity.ts          v2 observer metrics (crowd, bits, subset count, best guess, merge leak, per-holder success)
+ts/notes-epochs.ts             v2 across epochs: success without a link, linked destinations, payment delay per holder
+ts/notes-fixture.ts            v2 worlds (200 holders, 30-epoch history, the 7-owner fixture) and the reports
+ts/*.test.ts                   32 tests (node:test): 13 v1, 19 v2
 ```
 
 ```

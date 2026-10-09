@@ -1,4 +1,4 @@
-// Reference accounting for the Unbroken and First Light boosts, Season 1 (v3.1, 9 Oct 2026).
+// Reference accounting for the Unbroken and First Light boosts, Season 1 (v3.2, 9 Oct 2026).
 // Both are about tokens, not wallets: each token carries the day it was bought, and whether it was bought in the
 // first hour (First Light).
 // - A buy adds tokens dated today.
@@ -8,10 +8,15 @@
 // - First Light: tokens bought in the launch hour carry +0.50, under the same pro-rata rules.
 // - v3.1: shared contracts (NFT vaults, staking, lending, exchange wallets, any pool) are treated like the pool:
 //   tokens going in leave the ledger like a sale, tokens coming out are new, dated that day, without First Light.
-//   Ages cannot be pooled in a contract and handed to someone else. Wallets you control alone (EOA, Safe,
-//   ERC-4337 or EIP-7702 accounts) are wallets: moving there keeps every token's age.
+//   Ages cannot be pooled in a contract and handed to someone else.
+// - v3.2: signer control is not ownership (a Safe can hold customer deposits). EOAs and EIP-7702 accounts are
+//   wallets. Any other contract, Safe and ERC-4337 accounts included, is shared unless every owner signed an
+//   attestation that the account holds only their own tokens, bound to the owner set and threshold at signing: any
+//   owner or threshold change voids it (attestationValid, classify, reclassify). An attestation cannot prove
+//   beneficial ownership, and an EOA custodian is invisible: see PHASES.md, "Known limits".
 // Every step is linear in the amounts, so splitting a wallet (before a sale or at any time) changes nothing.
 // Amounts are integers (token wei). Pure functions: the indexer applies the same steps to every $EPH transfer.
+import { createHash } from 'node:crypto';
 
 export const RAMP_DAYS = 7;
 
@@ -124,4 +129,67 @@ export function move(l: Ledger, from: string, to: string, amount: bigint, day: n
   if (f === 'wallet' && t === 'wallet') return transfer(l, from, to, amount);
   if (f === 'wallet') sell(l, from, amount);
   if (t === 'wallet') buy(l, to, amount, day, firstLight);
+}
+
+/** The owner set and threshold of a multi-owner account, canonical (owners sorted, lowercased). */
+export function ownersHash(owners: string[], threshold: number): string {
+  const set = [...new Set(owners.map(key))].sort();
+  if (set.length !== owners.length) throw new Error('owner listed twice');
+  if (!Number.isInteger(threshold) || threshold < 1 || threshold > set.length) throw new Error('bad threshold');
+  return createHash('sha256').update(`${threshold}|${set.join(',')}`).digest('hex');
+}
+
+/**
+ * v3.2: "every owner of this account holds it only for themselves, this season", signed by every owner. It is bound to
+ * the exact owner set and threshold at signing time (ownersHash), and the indexer records when it was signed.
+ */
+export type Attestation = { owners: string[]; threshold: number; ownersHash: string; signedBy: string[]; signedAt: number };
+
+/** What the indexer knows about an address (v3.2). */
+export type AddressInfo = {
+  hasCode: boolean; // any code at the address
+  is7702: boolean; // an EOA whose code is an EIP-7702 delegation (0xef0100 prefix): still one key
+  ownersHash?: string; // multi-owner accounts: the CURRENT owner set + threshold (Safe getOwners() / getThreshold())
+  ownersChangedAt?: number; // when the owner set or threshold last changed (AddedOwner / RemovedOwner / ChangedThreshold)
+  attestation?: Attestation; // the latest attestation submitted for the account, if any
+};
+
+/**
+ * v3.2: an attestation counts only while the account still has exactly the owner set and threshold it was signed under:
+ * signed by every owner of that set, that set is the current one, and it has not changed since the signing (so
+ * A -> A+custodian -> A does not revive it). Any owner or threshold change voids it from that moment; a new attestation
+ * by the new owner set is needed. It proves who controls the account, not who owns the tokens in it: a custodian can
+ * sign it falsely, and nothing on chain can tell (see PHASES.md and the false-attestation property test).
+ */
+export function attestationValid(i: AddressInfo): boolean {
+  const a = i.attestation;
+  if (!a || i.ownersHash === undefined) return false;
+  let hash: string;
+  try {
+    hash = ownersHash(a.owners, a.threshold);
+  } catch {
+    return false;
+  }
+  if (hash !== a.ownersHash || a.ownersHash !== i.ownersHash) return false;
+  if (i.ownersChangedAt !== undefined && i.ownersChangedAt > a.signedAt) return false;
+  const signed = new Set(a.signedBy.map(key));
+  return a.owners.every((o) => signed.has(key(o)));
+}
+
+/** v3.2 classification: EOA and 7702 = wallet; any other contract = shared unless it has a valid attestation. */
+export function classify(i: AddressInfo): Kind {
+  if (!i.hasCode || i.is7702) return 'wallet';
+  return attestationValid(i) ? 'wallet' : 'shared';
+}
+
+/**
+ * When an address changes class (an owner change voids its attestation, or a new attestation is accepted), the tokens
+ * it holds are treated as if they moved at that moment. wallet -> shared: like a deposit into a shared contract, they
+ * leave the ledger (their ages and First Light end). shared -> wallet: like tokens coming out of one, they are dated
+ * `day`, without First Light; `onchainBalance` is the address's $EPH balance then.
+ */
+export function reclassify(l: Ledger, a: string, before: Kind, after: Kind, onchainBalance: bigint, day: number): void {
+  if (before === after) return;
+  if (after === 'shared') sell(l, a, balanceOf(l, a));
+  else if (onchainBalance > 0n) buy(l, a, onchainBalance, day);
 }

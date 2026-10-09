@@ -2,6 +2,8 @@
 //   node --experimental-strip-types notes-fixture.ts small > ../test/fixtures/notes8.json
 //   node --experimental-strip-types notes-fixture.ts world > ../test/fixtures/notes200.json
 //   node --experimental-strip-types notes-fixture.ts report     (the base-unit trade-off table in PAYOUTS.md)
+//   node --experimental-strip-types notes-fixture.ts holders    (per-holder guessing success, epoch 0, worst 5 holders)
+//   node --experimental-strip-types notes-fixture.ts epochs     (30 epochs with carry: linking, payment delay vs privacy)
 // Keys and addresses here come from fixed labels: test data only.
 //
 // Reward model ("my rewards follow holding time, including previous owners"): each epoch the payer splits a reward pool
@@ -14,7 +16,8 @@ import { pathToFileURL } from 'node:url';
 import { metaAddressOf, metadataForETH, type StealthKeys } from './stealth.ts';
 import { testKeys, testOwners, type Owner } from './fixture.ts';
 import { expectedBatch, planNotesEpoch, withCarries, type LedgerEntry, type NoteHolder, type NotesPlan } from './notes.ts';
-import { analyzeBatch, analyzeExactAmounts } from './notes-anonymity.ts';
+import { analyzeBatch, analyzeExactAmounts, holderSuccess, spread, whyExposed, type Spread } from './notes-anonymity.ts';
+import { linkedSuccess, paymentDelays, runEpochs, successOverRun, type Habit } from './notes-epochs.ts';
 
 export const WEIGHT_CAP_DAYS = 180n;
 
@@ -247,12 +250,126 @@ export function notesReport(bases = [10n ** 12n, 10n ** 13n, 10n ** 14n], minCro
   return { holders: lines.length, exactAmountsAlone: analyzeExactAmounts(lines.map((l) => l.debt)).alone, minCrowd, rows };
 }
 
+// ---------------------------------------------------------------- per holder, across epochs, and what rounding costs
+
+/** Who each world owner is, for the worst-holders list: "owner #0 (16 NFTs)" or "seller #3 (sold today)". */
+export function worldHolders(): Map<Address, string> {
+  const w = world();
+  const held = new Map<Address, number>();
+  for (const o of w.ownerOf.values()) held.set(o, (held.get(o) ?? 0) + 1);
+  const names = new Map<Address, string>();
+  w.owners.forEach((o, i) => names.set(o, `owner #${i} (${held.get(o) ?? 0} NFT${held.get(o) === 1 ? '' : 's'})`));
+  w.sales.forEach((s, j) => names.set(s.from, `seller #${j} (sold its NFT today)`));
+  return names;
+}
+
+const pct = (x: number, d = 1) => `${(x * 100).toFixed(d)}%`;
+const fmtSpread = (s: Spread, d = 1) => [s.min, s.p10, s.median, s.p90, s.max].map((x) => pct(x, d)).join(' / ');
+
+/** Per-holder guessing success in the 200-holder epoch (PAYOUTS.md, "Per holder"). */
+export function holdersReport(base = WORLD_BASE, minCrowd = WORLD_MIN_CROWD) {
+  const { lines, batch } = worldBatch(base, minCrowd);
+  const hs = holderSuccess(batch);
+  const names = worldHolders();
+  const worst = [...hs].sort((a, b) => b.noteSuccess - a.noteSuccess).slice(0, 5);
+  const notes = hs.reduce((s, h) => s + h.notes, 0);
+  // What one step lower cap would do for the most exposed holder (more notes, smaller share of a bigger group).
+  const lower = holderSuccess(expectedBatch(lines, base, minCrowd, { kmax: batch.kmax - 1 }));
+  const w0 = lower.find((h) => h.owner === worst[0].owner)!;
+  return {
+    base: base.toString(),
+    kmax: batch.kmax,
+    holders: lines.length,
+    paid: hs.length,
+    unpaid: lines.length - hs.length,
+    notes,
+    averageOverNotes: hs.reduce((s, h) => s + h.noteSuccess * h.notes, 0) / notes,
+    bestGuessRate: analyzeBatch(batch).bestGuessRate,
+    noteSuccess: hs.map((h) => h.noteSuccess),
+    spreads: {
+      noteSuccess: fmtSpread(spread(hs.map((h) => h.noteSuccess))),
+      exposedNote: fmtSpread(spread(hs.map((h) => h.exposedNote.share))),
+      setSuccess: fmtSpread(spread(hs.map((h) => h.setSuccess)), 4),
+    },
+    worst: worst.map((h) => ({
+      who: names.get(h.owner) ?? h.owner,
+      owner: h.owner,
+      noteSuccess: pct(h.noteSuccess),
+      setSuccess: h.setSuccess.toExponential(1),
+      why: whyExposed(h, batch.kmax),
+    })),
+    lowerCap: { kmax: batch.kmax - 1, notes: lower.reduce((s, h) => s + h.notes, 0), worstNoteSuccess: pct(w0.noteSuccess) },
+  };
+}
+
+export const RUN_EPOCHS = 30;
+export const LINK_T = [1, 3, 10, 30];
+
+/**
+ * 30 epochs of the world with carry (PAYOUTS.md, "Across epochs" and "Payment delay vs privacy"): what linking epochs
+ * adds at the default base, and for each base unit what the delay costs against what the privacy gains.
+ */
+export function epochsReport(bases = [10n ** 13n, 10n ** 14n, 10n ** 15n], minCrowd = WORLD_MIN_CROWD, epochs = RUN_EPOCHS) {
+  const history = worldHistory(epochs);
+  const ms = (xs: number[]) => {
+    const s = spread(xs);
+    return `${pct(s.median)} / ${pct(s.p90)}`;
+  };
+  const run = runEpochs(history, WORLD_BASE, minCrowd);
+  const linking = {
+    none: LINK_T.map((T) => ms(successOverRun(run, T).map((h) => h.noteSuccess))),
+    ...Object.fromEntries(
+      (['schedule', 'one-note', 'merge'] as Habit[]).map((habit) => [
+        habit,
+        LINK_T.map((T) => {
+          const r = linkedSuccess(run, T, habit);
+          return `${ms(r.map((x) => x.success))} (${r.filter((x) => x.candidates === 1).length}/${r.length} named)`;
+        }),
+      ]),
+    ),
+  };
+  const tradeOff = bases.map((base) => {
+    const r = base === WORLD_BASE ? run : runEpochs(history, base, minCrowd);
+    const over = successOverRun(r);
+    const d = paymentDelays(r);
+    const acc = d.filter((x) => x.accruedEveryEpoch);
+    const eth = (w: bigint) => (Number(w) / 1e18).toPrecision(2);
+    const mean = spread(d.map((x) => x.meanDelay));
+    const linked10 = spread(linkedSuccess(r, 10, 'one-note').map((x) => x.success));
+    const merged0 = analyzeBatch(r.batches[0]);
+    return {
+      base: base.toString(),
+      notesPerEpoch: Math.round(r.batches.reduce((s, b) => s + b.notes, 0) / r.batches.length),
+      noteSuccess: (() => {
+        const s = spread(over.map((h) => h.noteSuccess));
+        return `${pct(s.median)} / ${pct(s.max)}`;
+      })(),
+      mergedUnique: `${merged0.mergedUnique} / ${merged0.holdersPaid}`,
+      linked10Median: pct(linked10.median),
+      meanDelayEpochs: `${mean.median.toFixed(2)} / ${mean.p90.toFixed(2)} / ${mean.max.toFixed(2)}`,
+      maxWaitAccruing: Math.max(...d.map((x) => x.maxDelayAccruing)),
+      maxWaitAny: Math.max(...d.map((x) => x.maxDelay)),
+      holdersWaitingOver1: d.filter((x) => x.maxDelayAccruing > 1).length,
+      carryEth: `${eth(BigInt(Math.round(spread(d.map((x) => Number(x.meanCarry))).median)))} / ${eth(d.reduce((m, x) => (x.maxCarry > m ? x.maxCarry : m), 0n))}`,
+      accruedEveryEpoch: acc.length,
+      openAtEnd: { owners: d.filter((x) => x.open > 0n).length, eth: eth(d.reduce((s, x) => s + x.open, 0n)), oldest: Math.max(...d.map((x) => x.openSince)) },
+    };
+  });
+  return { epochs, owners: run.owners.length, minCrowd, base: WORLD_BASE.toString(), T: LINK_T, linking, tradeOff };
+}
+
 export type { StealthKeys, NotesPlan };
 export { withCarries };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const which = process.argv[2];
-  const out = which === 'world' ? buildWorldFixture() : which === 'small' ? buildSmallFixture() : which === 'report' ? notesReport() : null;
-  if (!out) throw new Error('usage: notes-fixture.ts small|world|report');
+  const out =
+    which === 'world' ? buildWorldFixture()
+    : which === 'small' ? buildSmallFixture()
+    : which === 'report' ? notesReport()
+    : which === 'holders' ? (({ noteSuccess, ...r }) => r)(holdersReport())
+    : which === 'epochs' ? epochsReport()
+    : null;
+  if (!out) throw new Error('usage: notes-fixture.ts small|world|report|holders|epochs');
   process.stdout.write(JSON.stringify(out, null, 2) + '\n');
 }
