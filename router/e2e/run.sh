@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Receiver test on a local anvil chain: plain Uniswap v4 + StealthBuy, real ERC-5564 keys, no public network.
-#   e2e/run.sh                                  runs all three scenarios, each on its own fresh anvil (free port, stopped afterwards)
+#   e2e/run.sh                                  runs all four scenarios, each on its own fresh anvil (free port, stopped afterwards)
 #   SCENARIO=tip-only e2e/run.sh                positive only: the tip is the only ETH that reaches the stealth address
 #   SCENARIO=topup e2e/run.sh                   negative only: the receiver's wallet adds 12,345 wei; the audit must flag it
-#   SCENARIO=replay e2e/run.sh                  the same buy sent twice: the second must revert with StealthAddressNotFresh
+#   SCENARIO=replay e2e/run.sh                  the same buy sent twice: the second must revert with StealthAddressUsed
+#   SCENARIO=replay-drain e2e/run.sh            the same buy again after the receiver emptied the address: StealthAddressUsed
 #   RPC_URL=http://127.0.0.1:8545 e2e/run.sh    uses an anvil you already run (must be chain id 31337);
 #                                               each scenario then gets a fresh deployment and is audited from its first block
 # Needs: ./setup.sh done once (lib/), Foundry (anvil, cast, forge) on PATH, `npm i` in e2e/.
@@ -15,9 +16,12 @@ for bin in anvil cast forge node; do command -v "$bin" >/dev/null || { echo "e2e
 [ -d lib/v4-core ] || { echo "e2e: run ./setup.sh first (fetches lib/)" >&2; exit 1; }
 [ -x e2e/node_modules/.bin/tsx ] || { echo "e2e: run 'cd e2e && npm i' first" >&2; exit 1; }
 
-SCENARIOS=${SCENARIO:-tip-only topup replay}
+SCENARIOS=${SCENARIO:-tip-only topup replay replay-drain}
 for s in $SCENARIOS; do
-  case "$s" in tip-only | topup | replay) ;; *) echo "e2e: SCENARIO must be tip-only, topup or replay, not '$s'" >&2; exit 1 ;; esac
+  case "$s" in
+    tip-only | topup | replay | replay-drain) ;;
+    *) echo "e2e: SCENARIO must be tip-only, topup, replay or replay-drain, not '$s'" >&2; exit 1 ;;
+  esac
 done
 
 ANVIL_PID=

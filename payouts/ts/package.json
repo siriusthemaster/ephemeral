@@ -4,10 +4,11 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "Toy StealthPayout: epoch payout plan (ERC-5564 stealth addresses + commitments), holder-side scan, private proof of entitlement.",
+  "description": "Toy StealthPayout: epoch payout plan (ERC-5564 stealth addresses + commitments), holder-side scan, private proof of entitlement; v2 denomination notes for unequal debts.",
   "scripts": {
     "test": "node --experimental-strip-types --test *.test.ts",
-    "fixture": "node --experimental-strip-types fixture.ts > ../test/fixtures/epoch7.json"
+    "fixture": "node --experimental-strip-types fixture.ts > ../test/fixtures/epoch7.json",
+    "fixtures": "npm run fixture && node --experimental-strip-types notes-fixture.ts small > ../test/fixtures/notes8.json && node --experimental-strip-types notes-fixture.ts world > ../test/fixtures/notes200.json"
   },
   "engines": {
     "node": ">=22.6"

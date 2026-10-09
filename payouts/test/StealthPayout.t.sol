@@ -39,7 +39,7 @@ contract GasBurner {
 }
 
 /// @dev On receiving ETH, tries to call back into StealthPayout (mode 0: release(self), 1: withdrawParked(self),
-///      2: settle(...) as itself), logs what came back, then accepts or reverts.
+///      2: settle(...) as itself, 3: settleNotes(...) as itself), logs what came back, then accepts or reverts.
 contract ReentrantRecipient {
     event Reentry(bool ok, bytes4 errorSelector);
 
@@ -55,9 +55,15 @@ contract ReentrantRecipient {
 
     receive() external payable {
         bytes memory data;
-        if (mode == 0) data = abi.encodeCall(StealthPayout.release, (address(this)));
-        else if (mode == 1) data = abi.encodeCall(StealthPayout.withdrawParked, (address(this)));
-        else data = abi.encodeCall(StealthPayout.settle, (1, bytes32(uint256(1)), new StealthPayout.Recipient[](0)));
+        if (mode == 0) {
+            data = abi.encodeCall(StealthPayout.release, (address(this)));
+        } else if (mode == 1) {
+            data = abi.encodeCall(StealthPayout.withdrawParked, (address(this)));
+        } else if (mode == 2) {
+            data = abi.encodeCall(StealthPayout.settle, (1, bytes32(uint256(1)), new StealthPayout.Recipient[](0)));
+        } else {
+            data = abi.encodeCall(StealthPayout.settleNotes, (1, bytes32(uint256(1)), 1, new StealthPayout.Group[](0)));
+        }
         (bool ok, bytes memory ret) = address(target).call(data);
         emit Reentry(ok, ret.length >= 4 ? bytes4(ret) : bytes4(0));
         if (!acceptAfter) revert("refused");

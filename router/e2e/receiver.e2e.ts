@@ -13,7 +13,11 @@
 // exactly 12,345 wei to the stealth address. It passes only if the same audit flags that transaction and that amount.
 // SCENARIO=replay: same flow, but right after the buy the buyer sends the very same prepared buy again (same stealth
 // address, same ephemeral key; found on mainnet on 8 Oct). It passes only if that second transaction is mined and reverts
-// with StealthAddressNotFresh, moves no ETH, and the rest of the flow, the funding audit included, stays tip-only.
+// with StealthAddressUsed, moves no ETH, and the rest of the flow, the funding audit included, stays tip-only.
+// SCENARIO=replay-drain: same flow, and after the receiver has drained every token and every wei of ETH to a fresh
+// address, the buyer sends the very same prepared buy again (Claus Lab review, 9 Oct: empty balances alone would let it
+// through). It passes only if that transaction is mined and reverts with StealthAddressUsed, moves nothing, announces
+// nothing, and the funding audit stays tip-only.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
@@ -63,7 +67,10 @@ type Deployment = {
 
 const RPC = process.env.RPC_URL ?? 'http://127.0.0.1:8545';
 const SCENARIO = process.env.SCENARIO ?? 'tip-only';
-assert.ok(['tip-only', 'topup', 'replay'].includes(SCENARIO), `SCENARIO must be tip-only, topup or replay, not ${SCENARIO}`);
+assert.ok(
+  ['tip-only', 'topup', 'replay', 'replay-drain'].includes(SCENARIO),
+  `SCENARIO must be tip-only, topup, replay or replay-drain, not ${SCENARIO}`,
+);
 const dep =JSON.parse(readFileSync(new URL('./local.json', import.meta.url), 'utf8')) as Deployment;
 const transport = http(RPC);
 const pub = createPublicClient({ chain: foundry, transport });
@@ -116,7 +123,15 @@ const stealthBuyAbi = [
     ],
     outputs: [{ name: 'tokensOut', type: 'uint256' }],
   },
+  {
+    type: 'function',
+    name: 'used',
+    stateMutability: 'view',
+    inputs: [{ name: '', type: 'address' }],
+    outputs: [{ name: '', type: 'bool' }],
+  },
   { type: 'error', name: 'StealthAddressNotFresh', inputs: [] },
+  { type: 'error', name: 'StealthAddressUsed', inputs: [] },
 ] as const;
 
 const rpc = pub.request as unknown as (a: { method: string; params: unknown[] }) => Promise<unknown>; // anvil's trace/debug methods
@@ -124,6 +139,7 @@ const ethOf = (address: Address) => pub.getBalance({ address });
 const nonceOf = (address: Address) => pub.getTransactionCount({ address });
 const tokensOf = (address: Address) =>
   pub.readContract({ address: dep.token, abi: erc20Abi, functionName: 'balanceOf', args: [address] });
+const usedBy = (address: Address) => pub.readContract({ address: dep.stealthBuy, abi: stealthBuyAbi, functionName: 'used', args: [address] });
 
 /** maxFeePerGas = maxPriorityFeePerGas = price, so the price paid is exactly `price` (it is above any next base fee). */
 async function price() {
@@ -183,16 +199,17 @@ assert.equal(await ethOf(stealth), 0n, 'stealth address starts with 0 ETH');
 assert.equal(await nonceOf(stealth), 0, 'stealth address starts with nonce 0');
 assert.equal(await tokensOf(stealth), 0n);
 assert.equal((await pub.getCode({ address: stealth })) ?? '0x', '0x');
+assert.equal(await usedBy(stealth), false, 'not in the router\'s use record yet');
 const buy = await stealthBuy(g);
 assert.equal(await ethOf(stealth), TIP, 'right after the buy the stealth address holds exactly the tip');
 assert.equal(await tokensOf(stealth), buy.quoted, 'tokens landed on the stealth address');
 assert.equal(await ethOf(dep.stealthBuy), 0n, 'the router keeps nothing');
+assert.equal(await usedBy(stealth), true, 'the router recorded the stealth address');
 
-// replay scenario only: the buyer sends the same prepared buy a second time. It must be mined and revert with
-// StealthAddressNotFresh, and move nothing: no swap, no tip, no announcement.
-let replay: { hash: Hex; gasUsed: bigint } | undefined;
-if (SCENARIO === 'replay') {
-  const buyerBefore = await ethOf(buyerEOA);
+/** Sends the very same prepared buy again. It must be mined and revert with StealthAddressUsed, and move nothing: no
+ *  swap, no tip, no announcement; the stealth address keeps exactly what it had. */
+async function replayBuy() {
+  const [buyerBefore, ethBefore, tokensBefore] = await Promise.all([ethOf(buyerEOA), ethOf(stealth), tokensOf(stealth)]);
   const p = await price();
   // explicit gas: no estimate (which would refuse it), so the replay is really sent and mined, as on mainnet
   const hash = await buyer.writeContract({ ...buy.call, gas: 1_000_000n, maxFeePerGas: p, maxPriorityFeePerGas: p });
@@ -200,16 +217,24 @@ if (SCENARIO === 'replay') {
   const [first, second] = await Promise.all([pub.getTransaction({ hash: buy.hash }), pub.getTransaction({ hash })]);
   assert.equal(second.input, first.input, 'the replay is the same buy command, byte for byte');
   assert.equal(second.value, first.value);
-  assert.equal(r.status, 'reverted', 'the second buy reverted on chain');
+  assert.equal(r.status, 'reverted', 'the replayed buy reverted on chain');
   assert.equal(r.logs.length, 0, 'nothing announced');
   const trace = (await rpc({ method: 'debug_traceTransaction', params: [hash, { tracer: 'callTracer' }] })) as { output?: Hex };
   assert.ok(trace.output && trace.output !== '0x', 'the revert carries an error');
   const { errorName } = decodeErrorResult({ abi: stealthBuyAbi, data: trace.output });
-  assert.equal(errorName, 'StealthAddressNotFresh', 'reverted with StealthAddressNotFresh');
+  assert.equal(errorName, 'StealthAddressUsed', 'reverted with StealthAddressUsed');
   assert.equal(await ethOf(buyerEOA), buyerBefore - r.gasUsed * p, 'the replay cost the buyer its gas and nothing else');
+  assert.equal(await ethOf(stealth), ethBefore, 'no ETH reached the stealth address');
+  assert.equal(await tokensOf(stealth), tokensBefore, 'no tokens reached the stealth address');
+  return { hash, gasUsed: r.gasUsed };
+}
+
+// replay scenario only: the buyer sends the same prepared buy a second time, right away (the 8 Oct mainnet case)
+let replay: { hash: Hex; gasUsed: bigint } | undefined;
+if (SCENARIO === 'replay') {
+  replay = await replayBuy();
   assert.equal(await ethOf(stealth), TIP, 'still exactly the first tip');
   assert.equal(await tokensOf(stealth), buy.quoted, 'still exactly the first buy');
-  replay = { hash, gasUsed: r.gasUsed };
 }
 
 // negative scenario only: the receiver's usual wallet tops the stealth address up (the leak the audit must catch)
@@ -302,6 +327,19 @@ assert.equal(await ethOf(fresh), left - fee2);
 assert.equal(await tokensOf(fresh), buy.quoted, 'the fresh address holds every token bought');
 assert.equal(await nonceOf(stealth), 2, 'the stealth address sent exactly two transactions');
 
+// replay-drain scenario only: the stealth address is now empty (0 ETH, 0 tokens, no code), so a check of balances alone
+// would accept it again. The same prepared buy is sent once more; the router's use record must refuse it.
+let replayDrained: { hash: Hex; gasUsed: bigint } | undefined;
+if (SCENARIO === 'replay-drain') {
+  assert.equal(await tokensOf(stealth), 0n, 'drained: no tokens');
+  assert.equal(await ethOf(stealth), 0n, 'drained: no ETH');
+  assert.equal((await pub.getCode({ address: stealth })) ?? '0x', '0x', 'drained: no code');
+  replayDrained = await replayBuy();
+  assert.equal(await ethOf(stealth), 0n, 'still empty');
+  assert.equal(await tokensOf(stealth), 0n, 'still empty');
+  assert.equal(await usedBy(stealth), true, 'still recorded');
+}
+
 // ------------------------------------------------------------------------------------------------ audit: where did the stealth address's ETH come from?
 type Trace = {
   type: string;
@@ -367,7 +405,7 @@ assert.deepEqual(audit.txsFrom, [spendTx, sweepTx], 'the stealth address sent on
 assert.equal(funded, fee1 + fee2 + (left - fee2), 'ledger: tip (+ top-up) = gas for both transactions + ETH swept');
 
 const short = (h: Hex) => `${h.slice(0, 10)}…${h.slice(-6)}`;
-if (SCENARIO === 'tip-only' || SCENARIO === 'replay') {
+if (SCENARIO === 'tip-only' || SCENARIO === 'replay' || SCENARIO === 'replay-drain') {
   assertTipOnly(violations);
   // the same, spelled out
   assert.deepEqual(audit.txsTo, [], 'no transaction was ever sent to the stealth address');
@@ -382,12 +420,17 @@ if (SCENARIO === 'tip-only' || SCENARIO === 'replay') {
   buy                     ${short(buy.hash)}  ${formatEther(SWAP)} ETH -> ${formatEther(buy.quoted)} TKN to ${stealth}, tip ${formatEther(TIP)} ETH${
     replay
       ? `
-  same buy again          ${replay.hash}  mined, reverted: StealthAddressNotFresh (gas ${replay.gasUsed}; no ETH moved, nothing announced)`
+  same buy again          ${replay.hash}  mined, reverted: StealthAddressUsed (gas ${replay.gasUsed}; no ETH moved, nothing announced)`
       : ''
   }
   discovered              1 of ${checked} announcements via view tag + viewing key; metadata 57 bytes: token ${dep.token}, amount ${formatEther(hit.meta.amount!)}
   token spend             ${short(spendTx)}  ${formatEther(amount)} TKN -> fresh ${fresh}, fee ${formatEther(fee1)} ETH from the tip
-  ETH sweep               ${short(sweepTx)}  ${formatEther(left - fee2)} ETH -> fresh, fee ${formatEther(fee2)} ETH; stealth address now 0 ETH
+  ETH sweep               ${short(sweepTx)}  ${formatEther(left - fee2)} ETH -> fresh, fee ${formatEther(fee2)} ETH; stealth address now 0 ETH${
+    replayDrained
+      ? `
+  same buy after drain    ${replayDrained.hash}  mined, reverted: StealthAddressUsed (gas ${replayDrained.gasUsed}; address empty, still refused)`
+      : ''
+  }
   funding audit           only ETH ever received: ${formatEther(TIP)} ETH from StealthBuy in the buy tx (all call frames traced)`);
 } else {
   // negative: the same rule must fail, and its report must name the top-up transaction and the 12,345 wei

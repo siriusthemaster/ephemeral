@@ -1,0 +1,38 @@
+{
+  "holders": 200,
+  "base": "100000000000000",
+  "minCrowd": 20,
+  "kmax": 4,
+  "declaredTotal": "191100000000000000",
+  "notes": 359,
+  "amounts": [
+    "100000000000000",
+    "200000000000000",
+    "400000000000000",
+    "800000000000000",
+    "1600000000000000"
+  ],
+  "counts": [
+    57,
+    117,
+    49,
+    94,
+    42
+  ],
+  "distinctHolders": [
+    57,
+    117,
+    49,
+    94,
+    31
+  ],
+  "anonymity": {
+    "crowdMin": 31,
+    "crowdMedian": 57,
+    "bitsMin": 5.4,
+    "bitsMedian": 12.7,
+    "bestGuessRate": 0.031,
+    "exactAmountsAlone": 109,
+    "mergedUnique": 9
+  }
+}

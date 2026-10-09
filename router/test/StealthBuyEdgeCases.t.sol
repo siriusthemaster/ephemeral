@@ -59,21 +59,32 @@ contract DeployOnSwapHook is BaseTestHooks {
     }
 }
 
-/// @dev A buyer contract that re-enters on its refund.
+/// @dev A buyer contract that re-enters on its refund, buying on a second pool for `innerStealth`. The inner buy's revert
+///      data is kept (not bubbled), so a test can see why it failed.
 contract ReenteringBuyer {
     StealthBuy immutable sb;
     PoolKey key;
     PoolKey key2;
     bytes ephKey;
     address stealth;
+    address innerStealth;
     uint256 depth;
+    bytes public innerError;
 
-    constructor(StealthBuy _sb, PoolKey memory _key, PoolKey memory _key2, bytes memory _ephKey, address _stealth) {
+    constructor(
+        StealthBuy _sb,
+        PoolKey memory _key,
+        PoolKey memory _key2,
+        bytes memory _ephKey,
+        address _stealth,
+        address _innerStealth
+    ) {
         sb = _sb;
         key = _key;
         key2 = _key2;
         ephKey = _ephKey;
         stealth = _stealth;
+        innerStealth = _innerStealth;
     }
 
     function go(uint256 amount) external {
@@ -83,7 +94,10 @@ contract ReenteringBuyer {
     receive() external payable {
         if (depth == 0 && address(this).balance > 0.01 ether) {
             depth = 1;
-            sb.buy{value: 0.01 ether}(key2, StealthBuy.Stealth(stealth, ephKey, bytes1(0x22), 0, 0), "");
+            try sb.buy{value: 0.01 ether}(key2, StealthBuy.Stealth(innerStealth, ephKey, bytes1(0x22), 0, 0), "") {}
+            catch (bytes memory err) {
+                innerError = err;
+            }
         }
     }
 }
@@ -132,13 +146,28 @@ contract StealthBuyEdgeCasesTest is StealthBuyBase {
 
     function test_reentrantBuyerOnRefundIsHarmless() public {
         (PoolKey memory key, MockERC20 narrow) = _narrowPool();
-        ReenteringBuyer rb = new ReenteringBuyer(sb, key, poolKey, ephKey, stealth);
+        address stealth2 = makeAddr("second stealth");
+        ReenteringBuyer rb = new ReenteringBuyer(sb, key, poolKey, ephKey, stealth, stealth2);
         vm.deal(address(rb), 50 ether);
         rb.go(50 ether);
         assertEq(address(sb).balance, 0);
         assertGt(narrow.balanceOf(stealth), 0);
         assertGt(address(rb).balance, 40 ether, "refund of the unfilled part came back");
-        assertGt(tkn.balanceOf(stealth), 0, "re-entrant buy on the second pool also delivered");
+        assertEq(rb.innerError().length, 0, "the re-entrant buy went through");
+        assertGt(tkn.balanceOf(stealth2), 0, "re-entrant buy on the second pool also delivered");
+    }
+
+    /// @dev The record is written before any external call, so a buy re-entering from the refund (the last call) to the
+    ///      same stealth address already finds it used, even though it holds none of the second pool's token.
+    function test_reentrantBuyToSameAddressFindsItUsed() public {
+        (PoolKey memory key, MockERC20 narrow) = _narrowPool();
+        ReenteringBuyer rb = new ReenteringBuyer(sb, key, poolKey, ephKey, stealth, stealth);
+        vm.deal(address(rb), 50 ether);
+        rb.go(50 ether);
+        assertGt(narrow.balanceOf(stealth), 0, "outer buy delivered");
+        assertEq(rb.innerError(), abi.encodeWithSelector(StealthBuy.StealthAddressUsed.selector));
+        assertEq(tkn.balanceOf(stealth), 0, "nothing from the re-entrant buy");
+        assertEq(address(sb).balance, 0);
     }
 
     function test_partialFillRefundIsExact() public {

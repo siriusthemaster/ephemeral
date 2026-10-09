@@ -20,10 +20,15 @@ interface IERC5564Announcer {
 ///         spend, and the gas to move them is already there, so the receiver never funds that address from a known wallet.
 ///         What it does not give: the buyer's own address is visible as the sender of this transaction. Buying for
 ///         yourself from a known wallet links you to the stealth address; for that case fund the buy from a private source.
-///         Stateless: holds no funds between calls, has no owner and nothing to configure.
+///         Holds no funds between calls, has no owner and nothing to configure. Its only state is `used`: the stealth
+///         addresses it has paid, so that none of them can be paid by this deployment again.
 contract StealthBuy is IUnlockCallback {
     IPoolManager public immutable poolManager;
     IERC5564Announcer public immutable announcer;
+
+    /// @notice Stealth addresses this deployment has paid. Lasting: an address stays used after it is emptied.
+    ///         The record is per deployment; another StealthBuy deployment keeps its own.
+    mapping(address => bool) public used;
 
     uint256 public constant SCHEME_ID = 1; // secp256k1 with view tags
     uint256 public constant MAX_GAS_TIP = 0.01 ether;
@@ -42,6 +47,7 @@ contract StealthBuy is IUnlockCallback {
     error TooLittleReceived(uint256 out, uint256 minOut);
     error EthTransferFailed();
     error StealthAddressNotFresh();
+    error StealthAddressUsed();
 
     struct CallbackData {
         PoolKey key;
@@ -72,8 +78,10 @@ contract StealthBuy is IUnlockCallback {
     /// @param s        where the tokens go and how the receiver finds them
     /// @param hookData passed through to the pool's hook, if it has one
     /// @dev msg.value = ETH to swap + s.gasTip. ETH the pool does not use is refunded to the caller.
-    ///      The stealth address must be fresh: no code, no ETH and none of the token bought, checked before the swap.
-    ///      A one-time address that already holds something was used before, e.g. the same buy sent twice.
+    ///      A stealth address is paid at most once by this deployment: `used` records it before any external call, and a
+    ///      second buy to it reverts with StealthAddressUsed, also after the address was emptied.
+    ///      It must also be fresh: no code, no ETH and none of the token bought, checked before the swap. That also
+    ///      catches an address paid through another deployment and not emptied since, e.g. the same buy sent twice.
     function buy(PoolKey calldata key, Stealth calldata s, bytes calldata hookData)
         external
         payable
@@ -85,6 +93,8 @@ contract StealthBuy is IUnlockCallback {
         if (s.gasTip > MAX_GAS_TIP) revert TipTooHigh();
         if (msg.value <= s.gasTip) revert NothingToSwap();
         address to = s.stealthAddress;
+        if (used[to]) revert StealthAddressUsed();
+        used[to] = true; // effect before any external call (the balance check below is the first)
         if (to.code.length != 0 || to.balance != 0 || key.currency1.balanceOf(to) != 0) revert StealthAddressNotFresh();
 
         uint256 amountIn = msg.value - s.gasTip;
