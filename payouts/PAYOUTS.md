@@ -68,6 +68,13 @@ epoch) or `withdrawParked(to)` (the address itself, if it has code). Everyone's 
 `settle`, `release` and `withdrawParked`. The only write after a call is the parking credit, made only when that call
 failed, and a failed call's own state changes (any re-entry included) are rolled back.
 
+**One payout per entitlement per round, whatever R** (@contractclaus, 9 Oct: *"try a fresh R for the same entitlement
+in the same round"*). A fresh R is a fresh address, so nothing here is keyed on the destination: the epoch log
+`(payer, epoch)` rejects any second `settle` or `settleNotes` for the round, a v2 part must carry the epoch's root (which
+commits to every note's address) and cannot pass the declared total, and the planner, the only place that sees
+entitlements, rejects an NFT id (v2: an owner's ledger line) listed twice. Tests: `test_freshR_*`, `test_notes_freshR_*`
+and `a fresh R for the same entitlement in the same round`.
+
 ## What an observer sees, and what the holder can prove
 
 | | Observer (public chain + ledger + every public meta-address + NFT ownership) | Owner (viewing key) | A verifier the owner picks |
@@ -425,11 +432,13 @@ at that price.
 
 ```
 src/StealthPayout.sol          the contract: v1 settle, v2 settleNotes, parking (~290 lines with comments)
-test/StealthPayout.t.sol       v1, 16 tests (one fuzzed): equal split, remainder, ERC-5564 format, events, input checks,
-                               per-caller epochs, refusing / gas-burning / re-entrant recipients (as EIP-7702 code),
+test/StealthPayout.t.sol       v1, 17 tests (one fuzzed): equal split, remainder, ERC-5564 format, events, input checks,
+                               per-caller epochs, a fresh R in a settled round, refusing / gas-burning / re-entrant
+                               recipients (as EIP-7702 code),
                                parked + release + withdraw, the TypeScript plan settled on chain, gas at 10/100/200
-test/StealthPayoutNotes.t.sol  v2, 8 tests (one fuzzed): one group per denomination, input checks (incl. an address in
-                               two groups), the epoch log shared with v1, parts (mismatch, overpay, completion), parking
+test/StealthPayoutNotes.t.sol  v2, 9 tests (one fuzzed): one group per denomination, input checks (incl. an address in
+                               two groups), the epoch log shared with v1, parts (mismatch, overpay, completion, a fresh-R
+                               re-plan), parking
                                and re-entry, the TypeScript notes plan settled on chain with its leaves, gas for 200 holders
 test/fixtures/epoch7.json      v1 plan written by ts/fixture.ts (12 NFTs, 6 owners)
 test/fixtures/notes8.json      v2 plan written by ts/notes-fixture.ts (7 owners incl. a previous owner, 21 notes) and
@@ -444,7 +453,7 @@ ts/notes-proof.ts              v2 proveDebtSettled / verifyDebtSettled
 ts/notes-anonymity.ts          v2 observer metrics (crowd, bits, subset count, best guess, merge leak, per-holder success)
 ts/notes-epochs.ts             v2 across epochs: success without a link, linked destinations, payment delay per holder
 ts/notes-fixture.ts            v2 worlds (200 holders, 30-epoch history, the 7-owner fixture) and the reports
-ts/*.test.ts                   32 tests (node:test): 13 v1, 19 v2
+ts/*.test.ts                   33 tests (node:test): 14 v1, 19 v2
 ```
 
 ```

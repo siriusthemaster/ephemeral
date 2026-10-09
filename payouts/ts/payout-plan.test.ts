@@ -7,6 +7,8 @@ import { metadataForETH, parseMetadata, parseMetaAddress, stealthAddressFor, vie
 import { findMyPayouts, paymentsOf, planEpoch, randomSalt, settleCalldata, STEALTH_PAYOUT_ABI, type Entitlement } from './payout-plan.ts';
 import { leafHash, verifyInclusion } from './proof.ts';
 import { testOwners, testPlan, FIXTURE_AMOUNT, FIXTURE_EPOCH } from './fixture.ts';
+import { planNotesEpoch } from './notes.ts';
+import { smallWorld, SMALL_BASE, SMALL_EPOCH, SMALL_MIN_CROWD } from './notes-fixture.ts';
 
 const strip = (h: string) => h.slice(2).toLowerCase();
 
@@ -166,6 +168,33 @@ test('random salts work too, but then the operator must hand each receipt over p
   const b = findMyPayouts(bob.keys, { epoch: plan.epoch, amountEach: plan.amountEach, payments: paymentsOf(plan), leaves: plan.leaves, myNftIds: bob.nftIds });
   assert.equal(b.unmatched.length, 2, 'bob still finds both payments with his viewing key');
   assert.equal(b.receipts.length, 0, 'but cannot open their leaves without the delivered salts');
+});
+
+// @contractclaus (9 Oct): "try a fresh R for the same entitlement in the same round. A second payout must fail; the
+// nullifier should track the entitlement, not the destination." On chain: test_freshR_sameEntitlementSameEpoch_* and
+// test_notes_freshR_sameEpoch_* (the epoch log is keyed on (payer, epoch)). Here: the planner, the one place that sees
+// entitlements, keys on the NFT id (v2: the owner's ledger line), never on the destination.
+test('a fresh R for the same entitlement in the same round: new destination, still refused by entitlement', () => {
+  const { owners, plan } = testPlan();
+  const entitlements = owners.flatMap((o) => o.nftIds.map((nftId) => ({ nftId, metaAddress: o.metaAddress })));
+  // The same round planned again: every R is fresh, so every destination and the root are new. Anything keyed on the
+  // destination would let all of it through.
+  const again = planEpoch({ epoch: plan.epoch, amountEach: plan.amountEach, entitlements });
+  const paid = new Set(plan.recipients.map((r) => r.stealthAddress));
+  assert.ok(again.recipients.every((r) => !paid.has(r.stealthAddress)), 'no destination in common');
+  assert.notEqual(again.commitmentsRoot, plan.commitmentsRoot, 'so a new root: it cannot join the settled round on chain');
+
+  // Inside one round, the same NFT for the same holder twice (two fresh Rs, two destinations): refused by NFT id.
+  const bob = owners.find((o) => o.name === 'bob')!;
+  const twice = [...entitlements, { nftId: bob.nftIds[0], metaAddress: bob.metaAddress }];
+  assert.throws(() => planEpoch({ epoch: plan.epoch, amountEach: plan.amountEach, entitlements: twice }), /NFT 2 listed twice/);
+
+  // v2: the same ledger line (owner, epoch) twice, same meta-address: refused by owner.
+  const { holders } = smallWorld();
+  assert.throws(
+    () => planNotesEpoch({ epoch: SMALL_EPOCH, base: SMALL_BASE, minCrowd: SMALL_MIN_CROWD, holders: [...holders, { ...holders[0] }] }),
+    /listed twice: one ledger line per owner per epoch/,
+  );
 });
 
 test('rejects bad input', () => {

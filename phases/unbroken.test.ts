@@ -199,18 +199,19 @@ test('property: no sequence of moves through shared contracts raises the Unbroke
 
 // v3.2, Claus Lab (9 Oct): "a Safe can hold customer deposits with withdrawal claims; signer control doesn't make
 // those gifts." A Safe or 4337 account is shared by default; only an attestation by every owner makes it a wallet.
-const attest = (owners: string[], threshold: number, signedAt: number, signedBy = owners): Attestation => ({
-  owners, threshold, ownersHash: ownersHash(owners, threshold), signedBy, signedAt,
+// v3.2.1: both are bound to the owner-change counter (AddedOwner / RemovedOwner / ChangedThreshold events), not a time.
+const attest = (owners: string[], threshold: number, ownerChangeCountAtSigning: number, signedBy = owners): Attestation => ({
+  owners, threshold, ownersHash: ownersHash(owners, threshold), signedBy, ownerChangeCountAtSigning,
 });
-const safeOf = (owners: string[], threshold: number, ownersChangedAt: number, attestation?: Attestation): AddressInfo => ({
-  hasCode: true, is7702: false, ownersHash: ownersHash(owners, threshold), ownersChangedAt, attestation,
+const safeOf = (owners: string[], threshold: number, ownerChangeCount: number, attestation?: Attestation): AddressInfo => ({
+  hasCode: true, is7702: false, ownersHash: ownersHash(owners, threshold), ownerChangeCount, attestation,
 });
 const EOA: AddressInfo = { hasCode: false, is7702: false };
 
 test('v3.2: a custodial Safe is shared, fresh tokens deposited next to customers\' aged ones come out fresh', () => {
   const info: Record<string, AddressInfo> = {
     custodySafe: safeOf(['operator'], 1, 0), // no attestation
-    mySafe: safeOf(['bob'], 1, 0, attest(['bob'], 1, 1)),
+    mySafe: safeOf(['bob'], 1, 0, attest(['bob'], 1, 0)),
     delegated: { hasCode: true, is7702: true },
   };
   const kind = (a: string) => classify(info[a] ?? EOA);
@@ -237,26 +238,26 @@ test('v3.2: a custodial Safe is shared, fresh tokens deposited next to customers
 // Claus Lab (9 Oct): "an attestation isn't proof of beneficial ownership; a custodian can sign it or use an EOA/7702
 // too. Test false attestations and owner changes after signing."
 test('v3.2 attestationValid: bound to the exact owner set and threshold at signing; any change voids it for good', () => {
-  const a = attest(['bob', 'carol'], 2, 10);
+  const a = attest(['bob', 'carol'], 2, 3); // signed when the counter stood at 3 (owners set up and changed before)
   assert.equal(attestationValid(safeOf(['bob', 'carol'], 2, 3, a)), true);
   assert.equal(attestationValid(safeOf(['Carol', 'BOB'], 2, 3, a)), true, 'order and case do not matter');
-  assert.equal(attestationValid(safeOf(['bob', 'carol'], 2, 3, attest(['bob', 'carol'], 2, 10, ['bob']))), false, 'every owner must sign');
+  assert.equal(attestationValid(safeOf(['bob', 'carol'], 2, 3, attest(['bob', 'carol'], 2, 3, ['bob']))), false, 'every owner must sign');
   assert.equal(attestationValid(safeOf(['bob', 'carol'], 2, 3)), false, 'no attestation');
   assert.equal(attestationValid({ ...safeOf(['bob', 'carol'], 2, 3, a), ownersHash: undefined }), false, 'owner set unknown');
   assert.equal(attestationValid(safeOf(['bob', 'carol'], 2, 3, { ...a, ownersHash: ownersHash(['bob'], 1) })), false, 'claimed hash must match its own owners');
   assert.equal(attestationValid(safeOf(['bob', 'carol'], 2, 3, { ...a, threshold: 3 })), false, 'impossible threshold');
-  // after signing:
-  assert.equal(attestationValid(safeOf(['bob', 'carol', 'custodian'], 2, 12, a)), false, 'owner added');
-  assert.equal(attestationValid(safeOf(['bob'], 1, 12, a)), false, 'owner removed');
-  assert.equal(attestationValid(safeOf(['bob', 'custodian'], 2, 12, a)), false, 'owner swapped');
-  assert.equal(attestationValid(safeOf(['bob', 'carol'], 1, 12, a)), false, 'threshold changed');
-  assert.equal(attestationValid(safeOf(['bob', 'carol'], 2, 14, a)), false, 'changed and changed back (A -> A+custodian -> A): still void');
-  assert.equal(attestationValid(safeOf(['bob', 'carol'], 2, 14, attest(['bob', 'carol'], 2, 15))), true, 'a new attestation after the change');
-  for (const i of [safeOf(['bob', 'carol'], 1, 12, a), safeOf(['bob', 'carol'], 2, 14, a)]) assert.equal(classify(i), 'shared');
+  // after signing (each AddedOwner / RemovedOwner / ChangedThreshold event adds 1 to the counter):
+  assert.equal(attestationValid(safeOf(['bob', 'carol', 'custodian'], 2, 4, a)), false, 'owner added');
+  assert.equal(attestationValid(safeOf(['bob'], 1, 5, a)), false, 'owner removed');
+  assert.equal(attestationValid(safeOf(['bob', 'custodian'], 2, 5, a)), false, 'owner swapped');
+  assert.equal(attestationValid(safeOf(['bob', 'carol'], 1, 4, a)), false, 'threshold changed');
+  assert.equal(attestationValid(safeOf(['bob', 'carol'], 2, 5, a)), false, 'changed and changed back (A -> A+custodian -> A): still void');
+  assert.equal(attestationValid(safeOf(['bob', 'carol'], 2, 5, attest(['bob', 'carol'], 2, 5))), true, 'a new attestation after the change');
+  for (const i of [safeOf(['bob', 'carol'], 1, 4, a), safeOf(['bob', 'carol'], 2, 5, a)]) assert.equal(classify(i), 'shared');
 });
 
 test('Claus probe (owner change after signing): the Safe is shared from that point, tokens leaving it start at day 0', () => {
-  const info: Record<string, AddressInfo> = { bobSafe: safeOf(['bob'], 1, 0, attest(['bob'], 1, 1)) };
+  const info: Record<string, AddressInfo> = { bobSafe: safeOf(['bob'], 1, 0, attest(['bob'], 1, 0)) };
   const kind = (a: string) => classify(info[a] ?? EOA);
   const l: Ledger = new Map();
   buy(l, 'bob', 50_000n * E, 0, true); // launch hour
@@ -266,7 +267,7 @@ test('Claus probe (owner change after signing): the Safe is shared from that poi
   const w7 = totalWeight7(l, 7);
 
   // Day 7: a custodian is added as an owner. The attestation no longer matches the owner set: shared from now on.
-  info.bobSafe = safeOf(['bob', 'custodian'], 1, 7, info.bobSafe.attestation);
+  info.bobSafe = safeOf(['bob', 'custodian'], 1, 1, info.bobSafe.attestation);
   assert.equal(kind('bobSafe'), 'shared');
   reclassify(l, 'bobSafe', 'wallet', 'shared', 50_000n * E, 7); // like a deposit into a shared contract
   assert.equal(balanceOf(l, 'bobSafe'), 0n);
@@ -281,15 +282,92 @@ test('Claus probe (owner change after signing): the Safe is shared from that poi
   assert.equal(balanceOf(l, 'bobSafe'), 0n);
 
   // Day 9: the custodian is removed again. Same owner set as at signing, but it changed after: still shared.
-  info.bobSafe = safeOf(['bob'], 1, 9, info.bobSafe.attestation);
+  info.bobSafe = safeOf(['bob'], 1, 2, info.bobSafe.attestation);
   assert.equal(kind('bobSafe'), 'shared');
   // Day 10: bob attests again. A wallet from now on; the 31,000 inside are dated day 10, without First Light.
-  info.bobSafe = safeOf(['bob'], 1, 9, attest(['bob'], 1, 10));
+  info.bobSafe = safeOf(['bob'], 1, 2, attest(['bob'], 1, 2));
   assert.equal(kind('bobSafe'), 'wallet');
   reclassify(l, 'bobSafe', 'shared', 'wallet', 31_000n * E, 10);
   assert.equal(seasoned(l, 'bobSafe', 10), 0n);
   assert.equal(seasoned(l, 'bobSafe', 17), 31_000n * E);
   assert.equal(firstLightTokens(l, 'bobSafe'), 0n);
+});
+
+// v3.2.1, Claus Lab (9 Oct): "`ownersChangedAt > signedAt` accepts equal values. If these are timestamps or blocks,
+// changing owners and restoring them in the same block as the signing revives the attestation, because the owner set
+// matches again. Bind it to an owner-change counter instead." Every AddedOwner / RemovedOwner / ChangedThreshold event
+// adds 1, so a change that is undone leaves the counter 2 higher, whenever it happened.
+test('v3.2.1 Claus probe: owners changed and restored in the same block as the signing: the attestation stays void', () => {
+  const a = attest(['bob'], 1, 0); // signed in block 100, the counter at 0
+  // Later in block 100: AddedOwner(custodian), then RemovedOwner(custodian). The owner set is the signed one again, and
+  // v3.2's time check (changed at block 100 > signed at block 100) was false: it would have counted again.
+  const restored = safeOf(['bob'], 1, 2, a);
+  assert.equal(restored.ownersHash, a.ownersHash, 'same owner set as at signing');
+  assert.equal(attestationValid(restored), false, 'the counter moved from 0 to 2: void');
+  assert.equal(classify(restored), 'shared');
+  assert.equal(attestationValid(safeOf(['bob', 'custodian'], 1, 1, a)), false, 'and void in between');
+  // Signed after the change and the restore, in that same block: the owners signed counter 2, the current one. That is
+  // a new attestation by the current owner set, and it counts.
+  assert.equal(attestationValid(safeOf(['bob'], 1, 2, attest(['bob'], 1, 2))), true);
+});
+
+test('v3.2.1: owners or threshold changed and restored any time later: still void, only a new attestation counts', () => {
+  const a = attest(['bob', 'carol'], 2, 0);
+  assert.equal(attestationValid(safeOf(['bob', 'carol'], 2, 0, a)), true, 'no change since the signing');
+  for (const [count, what] of [
+    [2, 'threshold 2 -> 1 -> 2, a day later'],
+    [2, 'custodian added and removed, a week later'],
+    [4, 'carol swapped out and back in'],
+    [1_000, 'many changes later'],
+  ] as const) {
+    const i = safeOf(['bob', 'carol'], 2, count, a);
+    assert.equal(attestationValid(i), false, what);
+    assert.equal(classify(i), 'shared', what);
+  }
+  assert.equal(attestationValid(safeOf(['bob', 'carol'], 2, 4, attest(['bob', 'carol'], 2, 4))), true, 'signed again at the current counter');
+});
+
+test('v3.2.1: an unknown owner-change counter fails closed: the account is shared', () => {
+  const a = attest(['bob'], 1, 0);
+  const uncounted: AddressInfo = { hasCode: true, is7702: false, ownersHash: ownersHash(['bob'], 1), attestation: a };
+  assert.equal(attestationValid(uncounted), false, 'the indexer has no counter for the account');
+  assert.equal(classify(uncounted), 'shared');
+  // An attestation in the v3.2 format (a time, no counter) must be signed again.
+  const v32 = { owners: ['bob'], threshold: 1, ownersHash: ownersHash(['bob'], 1), signedBy: ['bob'], signedAt: 10 } as unknown as Attestation;
+  assert.equal(attestationValid(safeOf(['bob'], 1, 0, v32)), false, 'no counter in the attestation');
+  assert.equal(classify(safeOf(['bob'], 1, 0, v32)), 'shared');
+  for (const bad of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(attestationValid({ ...safeOf(['bob'], 1, 0, { ...a, ownerChangeCountAtSigning: bad }), ownerChangeCount: bad }), false, `counter ${bad}`);
+  }
+});
+
+test('v3.2.1 Claus probe: owners change and tokens move in the same transaction: the transfer is already shared', () => {
+  let info = safeOf(['bob'], 1, 0, attest(['bob'], 1, 0));
+  const kind = (a: string): Kind => (a === 'bobSafe' ? classify(info) : 'wallet');
+  const l: Ledger = new Map();
+  buy(l, 'bob', 50_000n * E, 0, true); // launch hour
+  move(l, 'bob', 'bobSafe', 50_000n * E, 2, kind);
+  assert.equal(kind('bobSafe'), 'wallet');
+
+  // Day 9, one transaction, logs in order: AddedOwner(custodian), Transfer(bobSafe -> custodian, 20,000),
+  // RemovedOwner(custodian). The indexer applies each log before the next one; it never waits for a refresh.
+  info = safeOf(['bob', 'custodian'], 1, 1, info.attestation); // AddedOwner: counter 0 -> 1
+  assert.equal(kind('bobSafe'), 'shared', 'shared from this log on');
+  reclassify(l, 'bobSafe', 'wallet', 'shared', 50_000n * E, 9);
+  move(l, 'bobSafe', 'custodian', 20_000n * E, 9, kind); // the transfer, same transaction, same counter
+  assert.equal(seasoned(l, 'custodian', 9), 0n, 'the moved tokens carry no age');
+  assert.equal(firstLightTokens(l, 'custodian'), 0n, 'and no First Light');
+  assert.equal(seasoned(l, 'custodian', 16), 20_000n * E, 'dated day 9: the normal 7-day ramp');
+  info = safeOf(['bob'], 1, 2, info.attestation); // RemovedOwner: counter 1 -> 2, the signed owner set again
+  assert.equal(kind('bobSafe'), 'shared', 'restoring the owners in the same transaction does not revive it');
+
+  // Control: classed with the stale info (before the AddedOwner log), the 20,000 would have left with age and First Light.
+  const stale: Ledger = new Map();
+  buy(stale, 'bob', 50_000n * E, 0, true);
+  move(stale, 'bob', 'bobSafe', 50_000n * E, 2, () => 'wallet');
+  move(stale, 'bobSafe', 'custodian', 20_000n * E, 9, () => 'wallet');
+  assert.equal(seasoned(stale, 'custodian', 9), 20_000n * E);
+  assert.equal(firstLightTokens(stale, 'custodian'), 20_000n * E);
 });
 
 // A false attestation: the custodian of a Safe that holds customer deposits signs "held only for myself". The signers
@@ -302,8 +380,8 @@ test('Claus probe (owner change after signing): the Safe is shared from that poi
 //   ledger is exactly what it would be had the customers kept their tokens in their own wallets. What the false
 //   attestation gets around is v3.1's reset, for the ages inside that custodian, and that is the whole damage.
 test('property: a false attestation (or an EOA / 7702 custodian) only mixes ages already inside that custodian', () => {
-  const honestSafe = safeOf(['bob'], 1, 0, attest(['bob'], 1, 1));
-  const falseSafe = safeOf(['custodian'], 1, 0, attest(['custodian'], 1, 1)); // holds customers' tokens, signs anyway
+  const honestSafe = safeOf(['bob'], 1, 0, attest(['bob'], 1, 0));
+  const falseSafe = safeOf(['custodian'], 1, 0, attest(['custodian'], 1, 0)); // holds customers' tokens, signs anyway
   assert.deepEqual(Object.keys(falseSafe).sort(), Object.keys(honestSafe).sort());
   assert.equal(attestationValid(falseSafe), true, 'valid: the signers are the owners; beneficial ownership is not on chain');
   const custodians: [string, AddressInfo][] = [

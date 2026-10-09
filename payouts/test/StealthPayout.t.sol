@@ -269,6 +269,40 @@ contract StealthPayoutTest is Test {
         assertEq(payout.commitmentsRootOf(operator, 7), ROOT);
     }
 
+    /// @dev @contractclaus (9 Oct): "try a fresh R for the same entitlement in the same round. A second payout must fail;
+    ///      the nullifier should track the entitlement, not the destination." A fresh ephemeral key R gives a fresh stealth
+    ///      address, so a check keyed on the destination would let it through. The epoch log is keyed on (payer, epoch):
+    ///      it covers every entitlement of the round, whatever R or address a second payout uses.
+    function test_freshR_sameEntitlementSameEpoch_secondPayoutReverts() public {
+        StealthPayout.Recipient[] memory paid = _recipients(3, 40);
+        _settle(7, paid, 3 ether);
+
+        // The entitlement paid to paid[1], again, under a fresh R: an address the contract has never seen.
+        StealthPayout.Recipient[] memory freshR = _recipients(1, 41);
+        for (uint256 i; i < 3; ++i) {
+            assertTrue(freshR[0].stealthAddress != paid[i].stealthAddress, "a new destination");
+            assertTrue(keccak256(freshR[0].ephemeralPubKey) != keccak256(paid[i].ephemeralPubKey), "a new R");
+        }
+        vm.startPrank(operator);
+        vm.expectRevert(abi.encodeWithSelector(StealthPayout.EpochAlreadySettled.selector, operator, 7));
+        payout.settle{value: 1 ether}(7, keccak256("root with the fresh leaf"), freshR);
+        StealthPayout.Group[] memory asNote = new StealthPayout.Group[](1); // the v2 entry point shares the log
+        asNote[0] = StealthPayout.Group(1 ether, freshR);
+        vm.expectRevert(abi.encodeWithSelector(StealthPayout.EpochAlreadySettled.selector, operator, 7));
+        payout.settleNotes{value: 1 ether}(7, keccak256("root with the fresh leaf"), 1 ether, asNote);
+        vm.stopPrank();
+
+        assertEq(freshR[0].stealthAddress.balance, 0, "the fresh destination got nothing");
+        assertEq(paid[1].stealthAddress.balance, 1 ether, "the entitlement was paid once");
+        assertEq(payout.commitmentsRootOf(operator, 7), ROOT, "the round's root is unchanged");
+        assertEq(address(payout).balance, 0);
+
+        // What is spent is (payer, epoch), not the destination: the next round takes that address (the planner never
+        // reuses one, since that would link the rounds, but the contract does not key anything on it).
+        _settle(8, freshR, 1 ether);
+        assertEq(freshR[0].stealthAddress.balance, 1 ether);
+    }
+
     function test_rejectsPlainEthTransfers() public {
         vm.prank(operator);
         (bool ok,) = address(payout).call{value: 1 ether}("");

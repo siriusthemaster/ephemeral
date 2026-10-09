@@ -308,6 +308,52 @@ contract StealthPayoutNotesTest is Test {
         assertEq(address(payout).balance, 0);
     }
 
+    /// @dev @contractclaus (9 Oct): a fresh R for the same entitlement in the same round must not pay twice. Parts of one
+    ///      epoch must carry its root, which commits to every note's stealth address, so the same ledger re-planned with
+    ///      fresh R (new addresses, so a new root) cannot join the epoch in progress; nothing joins it once complete; and
+    ///      no part can pay past the declared total, whatever root it names.
+    function test_notes_freshR_sameEpoch_secondPayoutReverts() public {
+        StealthPayout.Group[] memory all = _three(30); // the plan: 11 ether, root ROOT
+        StealthPayout.Group[] memory first = new StealthPayout.Group[](2);
+        (first[0], first[1]) = (all[0], all[1]); // 7 ether
+        StealthPayout.Group[] memory last = new StealthPayout.Group[](1);
+        last[0] = all[2]; // 4 ether
+        _settleNotes(6, ROOT, 11 ether, first);
+
+        StealthPayout.Group[] memory replanned = _three(31); // the same notes under fresh R: every address new
+        StealthPayout.Group[] memory replannedLast = new StealthPayout.Group[](1);
+        replannedLast[0] = replanned[2];
+        bytes32 freshRoot = keccak256("root of the re-plan");
+        vm.startPrank(operator);
+        vm.expectRevert(abi.encodeWithSelector(StealthPayout.PartMismatch.selector, operator, 6));
+        payout.settleNotes{value: 11 ether}(6, freshRoot, 11 ether, replanned);
+        vm.expectRevert(abi.encodeWithSelector(StealthPayout.PartMismatch.selector, operator, 6));
+        payout.settleNotes{value: 4 ether}(6, freshRoot, 11 ether, replannedLast);
+        vm.expectRevert(abi.encodeWithSelector(StealthPayout.ExceedsDeclared.selector, 11 ether, 4 ether));
+        payout.settleNotes{value: 11 ether}(6, ROOT, 11 ether, replanned); // the whole epoch again, under the right root
+        vm.expectRevert(abi.encodeWithSelector(StealthPayout.EpochAlreadySettled.selector, operator, 6));
+        payout.settle{value: 3 ether}(6, freshRoot, replanned[0].rs);
+
+        payout.settleNotes{value: 4 ether}(6, ROOT, 11 ether, last); // the plan's own last part completes the epoch
+        vm.expectRevert(abi.encodeWithSelector(StealthPayout.EpochAlreadySettled.selector, operator, 6));
+        payout.settleNotes{value: 4 ether}(6, ROOT, 11 ether, replannedLast);
+        vm.expectRevert(abi.encodeWithSelector(StealthPayout.EpochAlreadySettled.selector, operator, 6));
+        payout.settleNotes{value: 11 ether}(6, freshRoot, 11 ether, replanned);
+        vm.stopPrank();
+
+        for (uint256 j; j < 3; ++j) {
+            for (uint256 i; i < replanned[j].rs.length; ++i) {
+                assertEq(replanned[j].rs[i].stealthAddress.balance, 0, "no fresh-R note was paid");
+            }
+            for (uint256 i; i < all[j].rs.length; ++i) {
+                assertEq(all[j].rs[i].stealthAddress.balance, all[j].amountEach, "every planned note paid once");
+            }
+        }
+        (, uint256 o) = _outstanding(operator, 6);
+        assertEq(o, 0);
+        assertEq(address(payout).balance, 0);
+    }
+
     // ---------------------------------------------------------------- recipients with code, re-entrancy
 
     function test_notes_refusingRecipientParked_reentryBlocked() public {

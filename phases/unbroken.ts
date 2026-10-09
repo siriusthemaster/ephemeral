@@ -1,4 +1,4 @@
-// Reference accounting for the Unbroken and First Light boosts, Season 1 (v3.2, 9 Oct 2026).
+// Reference accounting for the Unbroken and First Light boosts, Season 1 (v3.2.1, 9 Oct 2026).
 // Both are about tokens, not wallets: each token carries the day it was bought, and whether it was bought in the
 // first hour (First Light).
 // - A buy adds tokens dated today.
@@ -14,6 +14,7 @@
 //   attestation that the account holds only their own tokens, bound to the owner set and threshold at signing: any
 //   owner or threshold change voids it (attestationValid, classify, reclassify). An attestation cannot prove
 //   beneficial ownership, and an EOA custodian is invisible: see PHASES.md, "Known limits".
+// - v3.2.1: the binding is an owner-change counter, not a time, so a change undone in the same block still voids it.
 // Every step is linear in the amounts, so splitting a wallet (before a sale or at any time) changes nothing.
 // Amounts are integers (token wei). Pure functions: the indexer applies the same steps to every $EPH transfer.
 import { createHash } from 'node:crypto';
@@ -141,29 +142,36 @@ export function ownersHash(owners: string[], threshold: number): string {
 
 /**
  * v3.2: "every owner of this account holds it only for themselves, this season", signed by every owner. It is bound to
- * the exact owner set and threshold at signing time (ownersHash), and the indexer records when it was signed.
+ * the exact owner set and threshold at signing time (ownersHash) and, v3.2.1, to the account's owner-change counter at
+ * signing (ownerChangeCountAtSigning, part of what the owners sign).
  */
-export type Attestation = { owners: string[]; threshold: number; ownersHash: string; signedBy: string[]; signedAt: number };
+export type Attestation = { owners: string[]; threshold: number; ownersHash: string; signedBy: string[]; ownerChangeCountAtSigning: number };
 
-/** What the indexer knows about an address (v3.2). */
+/** What the indexer knows about an address (v3.2.1). */
 export type AddressInfo = {
   hasCode: boolean; // any code at the address
   is7702: boolean; // an EOA whose code is an EIP-7702 delegation (0xef0100 prefix): still one key
   ownersHash?: string; // multi-owner accounts: the CURRENT owner set + threshold (Safe getOwners() / getThreshold())
-  ownersChangedAt?: number; // when the owner set or threshold last changed (AddedOwner / RemovedOwner / ChangedThreshold)
+  // v3.2.1: how many AddedOwner / RemovedOwner / ChangedThreshold events the account has ever emitted (0 after setup),
+  // applied in log order: a transfer later in the same transaction is classed with the new count and owner set.
+  ownerChangeCount?: number;
   attestation?: Attestation; // the latest attestation submitted for the account, if any
 };
 
 /**
  * v3.2: an attestation counts only while the account still has exactly the owner set and threshold it was signed under:
- * signed by every owner of that set, that set is the current one, and it has not changed since the signing (so
- * A -> A+custodian -> A does not revive it). Any owner or threshold change voids it from that moment; a new attestation
- * by the new owner set is needed. It proves who controls the account, not who owns the tokens in it: a custodian can
- * sign it falsely, and nothing on chain can tell (see PHASES.md and the false-attestation property test).
+ * signed by every owner of that set, and that set is the current one. v3.2.1 (Claus Lab): bound to a counter, not a
+ * time. The owner-change counter must still equal the one signed, so any owner or threshold change voids it for good,
+ * even one undone in the same block as the signing (A -> A+custodian -> A), which a timestamp or block number cannot
+ * tell apart. An unknown counter on either side fails closed (shared). A new attestation by the current owner set is
+ * needed. It proves who controls the account, not who owns the tokens in it: a custodian can sign it falsely, and
+ * nothing on chain can tell (see PHASES.md and the false-attestation property test).
  */
 export function attestationValid(i: AddressInfo): boolean {
   const a = i.attestation;
   if (!a || i.ownersHash === undefined) return false;
+  const n = i.ownerChangeCount;
+  if (n === undefined || !Number.isSafeInteger(n) || n < 0 || n !== a.ownerChangeCountAtSigning) return false;
   let hash: string;
   try {
     hash = ownersHash(a.owners, a.threshold);
@@ -171,7 +179,6 @@ export function attestationValid(i: AddressInfo): boolean {
     return false;
   }
   if (hash !== a.ownersHash || a.ownersHash !== i.ownersHash) return false;
-  if (i.ownersChangedAt !== undefined && i.ownersChangedAt > a.signedAt) return false;
   const signed = new Set(a.signedBy.map(key));
   return a.owners.every((o) => signed.has(key(o)));
 }
@@ -184,7 +191,8 @@ export function classify(i: AddressInfo): Kind {
 
 /**
  * When an address changes class (an owner change voids its attestation, or a new attestation is accepted), the tokens
- * it holds are treated as if they moved at that moment. wallet -> shared: like a deposit into a shared contract, they
+ * it holds are treated as if they moved at that moment (for an owner change: at that log, before any later transfer in
+ * the same transaction). wallet -> shared: like a deposit into a shared contract, they
  * leave the ledger (their ages and First Light end). shared -> wallet: like tokens coming out of one, they are dated
  * `day`, without First Light; `onchainBalance` is the address's $EPH balance then.
  */
