@@ -11,7 +11,7 @@ export type GuardInput = {
   payer?: Hex; // who sent the payment
   ownStealthAddresses: Hex[]; // every stealth address of ours we know about
   usedDestinations: Hex[]; // destinations that other payments of yours were withdrawn to (rebuilt from chain history, plus this session)
-  historyComplete?: boolean; // false while past withdrawals are loading or could not be read; default true
+  historyComplete: boolean; // true only once past withdrawals fully loaded; false while loading or unreadable. Missing = incomplete
   receivedAt?: number; // ms
   isToken: boolean;
   hasGas: boolean;
@@ -48,7 +48,7 @@ export function withdrawChecks(g: GuardInput): Check[] {
       level: 'warn',
       text: 'H3: you already sent another payment to this address. Collecting payments in one place links them.',
     });
-  else if (g.historyComplete === false)
+  else if (g.historyComplete !== true) // fail safe: false, or left out by a caller (undefined at runtime), is incomplete
     out.push({
       id: 'H3',
       level: 'warn',

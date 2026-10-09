@@ -12,6 +12,7 @@ The checks the ephemeral client runs before every withdrawal from a stealth addr
 | Timing: received less than an hour ago | warn | a fast withdrawal pairs easily with its payment |
 
 `destinationsFromHistory(own, history)` turns the transfers your stealth addresses sent (read from a block explorer; the client uses Blockscout's public API) into the past destinations H3 checks against.
+`historyComplete` is a required input (pass `true` only when that history fully loaded); if a caller leaves it out anyway, it counts as incomplete and H3 warns (fail safe, from the Claus Lab review).
 
 The client never offers the key wallet as a destination and has no sweep-all button.
 

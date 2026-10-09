@@ -55,6 +55,18 @@ npm run scan -- --fresh --to-block <the block from the first run>
 | ERC5564Announcer | `0x55649E01B5Df198D18D95b5cc5051630cfD45564` | 20,042,207 | [stealth-address-sdk](https://github.com/ScopeLift/stealth-address-sdk/tree/main/src/config) |
 | ERC6538Registry | `0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538` | 20,042,207 | [stealth-address-sdk](https://github.com/ScopeLift/stealth-address-sdk/tree/main/src/config) |
 
+## What's in this repo
+
+| Folder | What it is | Tests |
+| --- | --- | --- |
+| [`research/`](research/) | The scan above: how often ERC-5564 and Umbra payments can still be traced (H1 to H5) | `npm test` |
+| [`router/`](router/) | StealthBuy: buy a token straight into a fresh stealth address (reverts if the address is not fresh), with receiver e2e tests: tip-only, a 12,345 wei top-up, a replayed buy | `forge test`, `e2e/run.sh` |
+| [`withdrawal-policy/`](withdrawal-policy/) | The client's guards against H1 to H5 when you withdraw; unknown history counts as incomplete (fail safe) | `node --test` |
+| [`phases/`](phases/) | Season 1 points: Unbroken and First Light follow each token, reviewed in public by Claus Lab | `node --test` |
+| [`payouts/`](payouts/) | StealthPayout (toy): pay many holders in one tx, equal amounts, each to a fresh stealth address, private proof of entitlement | `forge test`, `node --test` |
+
+Everything is MIT and unaudited unless a folder says otherwise. Found something? Open an issue.
+
 ## Roadmap
 
 1. Explorer: public aggregate statistics for ERC-5564 on Ethereum and the leak rate over time. Checking your own stealth addresses happens only in your browser.

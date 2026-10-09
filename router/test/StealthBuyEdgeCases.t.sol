@@ -3,35 +3,59 @@ pragma solidity 0.8.26;
 
 import {Vm} from "forge-std/Vm.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
+import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
+import {BaseTestHooks} from "v4-core/test/BaseTestHooks.sol";
 import {DeltaReturningHook} from "v4-core/test/DeltaReturningHook.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {StealthBuy} from "../src/StealthBuy.sol";
 import {StealthBuyBase} from "./StealthBuy.t.sol";
 
 /// @dev A stealth "address" that is a contract and re-enters StealthBuy when it receives the gas tip.
+///      Its own address is no longer fresh by then, so the inner buy goes to another (fresh) stealth address.
 contract ReenteringStealth {
     StealthBuy immutable sb;
     PoolKey key;
     bytes ephKey;
+    address innerStealth;
     uint256 public reentered;
     uint256 public innerOut;
 
-    constructor(StealthBuy _sb, PoolKey memory _key, bytes memory _ephKey) {
+    constructor(StealthBuy _sb, PoolKey memory _key, bytes memory _ephKey, address _innerStealth) payable {
         sb = _sb;
         key = _key;
         ephKey = _ephKey;
+        innerStealth = _innerStealth;
     }
 
     receive() external payable {
         if (reentered == 0) {
             reentered = 1;
             innerOut = sb.buy{value: address(this).balance}(
-                key, StealthBuy.Stealth(address(this), ephKey, bytes1(0x11), 0, 0), ""
+                key, StealthBuy.Stealth(innerStealth, ephKey, bytes1(0x11), 0, 0), ""
             );
         }
+    }
+}
+
+/// @dev afterSwap hook that deploys a contract with CREATE2 (init code, salt and ETH value in hookData). The fresh-address
+///      check runs before the swap, so this is how code can still appear on the stealth address within the buy.
+contract DeployOnSwapHook is BaseTestHooks {
+    function afterSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, BalanceDelta, bytes calldata hookData)
+        external
+        override
+        returns (bytes4, int128)
+    {
+        (bytes memory initCode, bytes32 salt, uint256 value) = abi.decode(hookData, (bytes, bytes32, uint256));
+        address deployed;
+        assembly ("memory-safe") {
+            deployed := create2(value, add(initCode, 0x20), mload(initCode), salt)
+        }
+        require(deployed != address(0), "create2 failed");
+        return (IHooks.afterSwap.selector, 0);
     }
 }
 
@@ -65,16 +89,45 @@ contract ReenteringBuyer {
 }
 
 contract StealthBuyEdgeCasesTest is StealthBuyBase {
+    /// @dev A contract already on the stealth address is refused by the fresh-address check. Code can still appear there
+    ///      during the buy (here a hook deploys it with CREATE2 mid-swap); its re-entry on the tip stays harmless.
     function test_reentrantStealthAddressCannotTouchOtherFunds() public {
-        ReenteringStealth rs = new ReenteringStealth(sb, poolKey, ephKey);
-        vm.deal(address(rs), 0.5 ether);
+        address hookAddr = address(uint160(0xC0DE) << 144 | Hooks.AFTER_SWAP_FLAG);
+        vm.etch(hookAddr, address(new DeployOnSwapHook()).code);
+        vm.deal(hookAddr, 0.5 ether);
+        (PoolKey memory key, MockERC20 t) = _deepEthPool(IHooks(hookAddr));
+        address innerStealth = makeAddr("inner stealth");
+        bytes memory initCode =
+            abi.encodePacked(type(ReenteringStealth).creationCode, abi.encode(sb, poolKey, ephKey, innerStealth));
+        bytes32 salt = keccak256("stealth");
+        address rs = vm.computeCreate2Address(salt, keccak256(initCode), hookAddr);
+        assertEq(rs.code.length, 0, "fresh before the buy");
+
         uint256 tip = 0.01 ether;
         vm.prank(buyer);
-        uint256 out = sb.buy{value: 1 ether + tip}(poolKey, StealthBuy.Stealth(address(rs), ephKey, 0xaa, 0, tip), "");
-        assertEq(rs.reentered(), 1);
-        assertEq(tkn.balanceOf(address(rs)), out + rs.innerOut(), "both buys delivered");
+        uint256 out = sb.buy{value: 1 ether + tip}(
+            key, StealthBuy.Stealth(rs, ephKey, 0xaa, 0, tip), abi.encode(initCode, salt, uint256(0.5 ether))
+        );
+        assertGt(rs.code.length, 0, "deployed during the buy");
+        assertEq(ReenteringStealth(payable(rs)).reentered(), 1);
+        assertEq(t.balanceOf(rs), out, "outer buy delivered");
+        assertEq(tkn.balanceOf(innerStealth), ReenteringStealth(payable(rs)).innerOut(), "inner buy delivered");
+        assertGt(tkn.balanceOf(innerStealth), 0);
+        assertEq(rs.balance, 0, "the re-entrant buy spent its own ETH + the tip, nothing more");
         assertEq(address(sb).balance, 0, "router holds nothing");
         assertEq(buyer.balance, 100 ether - 1 ether - tip, "outer buyer paid exactly swap + tip");
+    }
+
+    function test_stealthAddressWithCodeReverts() public {
+        ReenteringStealth rs = new ReenteringStealth(sb, poolKey, ephKey, makeAddr("inner stealth"));
+        address delegated = makeAddr("delegated eoa");
+        vm.etch(delegated, abi.encodePacked(hex"ef0100", address(rs))); // EIP-7702 delegation designator (23 bytes)
+        vm.startPrank(buyer);
+        vm.expectRevert(StealthBuy.StealthAddressNotFresh.selector);
+        sb.buy{value: 0.05 ether}(poolKey, StealthBuy.Stealth(address(rs), ephKey, 0xaa, 0, 0.001 ether), "");
+        vm.expectRevert(StealthBuy.StealthAddressNotFresh.selector);
+        sb.buy{value: 0.05 ether}(poolKey, StealthBuy.Stealth(delegated, ephKey, 0xaa, 0, 0.001 ether), "");
+        vm.stopPrank();
     }
 
     function test_reentrantBuyerOnRefundIsHarmless() public {
@@ -155,6 +208,17 @@ contract StealthBuyEdgeCasesTest is StealthBuyBase {
         t.approve(address(modifyLiquidityRouter), type(uint256).max);
         (key,) = initPoolAndAddLiquidityETH(
             CurrencyLibrary.ADDRESS_ZERO, Currency.wrap(address(t)), IHooks(hookAddr), 3000, SQRT_PRICE_1_1, 10 ether
+        );
+    }
+
+    /// @dev ETH/token at 1:1 with the given hook, full-range liquidity of about 100 ETH on each side.
+    function _deepEthPool(IHooks hooks) internal returns (PoolKey memory key, MockERC20 t) {
+        t = new MockERC20("H", "H", 18);
+        t.mint(address(this), 1_000_000 ether);
+        t.approve(address(modifyLiquidityRouter), type(uint256).max);
+        (key,) = initPool(CurrencyLibrary.ADDRESS_ZERO, Currency.wrap(address(t)), hooks, 3000, SQRT_PRICE_1_1);
+        modifyLiquidityRouter.modifyLiquidity{value: 101 ether}(
+            key, IPoolManager.ModifyLiquidityParams(-887220, 887220, 100 ether, 0), ""
         );
     }
 

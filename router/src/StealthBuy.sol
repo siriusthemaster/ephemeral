@@ -41,6 +41,7 @@ contract StealthBuy is IUnlockCallback {
     error NothingToSwap();
     error TooLittleReceived(uint256 out, uint256 minOut);
     error EthTransferFailed();
+    error StealthAddressNotFresh();
 
     struct CallbackData {
         PoolKey key;
@@ -71,6 +72,8 @@ contract StealthBuy is IUnlockCallback {
     /// @param s        where the tokens go and how the receiver finds them
     /// @param hookData passed through to the pool's hook, if it has one
     /// @dev msg.value = ETH to swap + s.gasTip. ETH the pool does not use is refunded to the caller.
+    ///      The stealth address must be fresh: no code, no ETH and none of the token bought, checked before the swap.
+    ///      A one-time address that already holds something was used before, e.g. the same buy sent twice.
     function buy(PoolKey calldata key, Stealth calldata s, bytes calldata hookData)
         external
         payable
@@ -81,6 +84,8 @@ contract StealthBuy is IUnlockCallback {
         if (s.ephemeralPubKey.length != 33) revert BadEphemeralKey();
         if (s.gasTip > MAX_GAS_TIP) revert TipTooHigh();
         if (msg.value <= s.gasTip) revert NothingToSwap();
+        address to = s.stealthAddress;
+        if (to.code.length != 0 || to.balance != 0 || key.currency1.balanceOf(to) != 0) revert StealthAddressNotFresh();
 
         uint256 amountIn = msg.value - s.gasTip;
         uint256 ethPaid;

@@ -129,4 +129,51 @@ contract StealthBuyTest is StealthBuyBase {
         assertEq(buyer.balance, 100 ether - ethIn - tip);
         assertEq(address(sb).balance, 0);
     }
+
+    // ---------------------------------------------------------------- fresh address guard
+    // 8 Oct, mainnet: one prepared buy (same stealth address, same ephemeral key) was sent twice, through two routers.
+
+    function test_replaySameStealthAddressReverts() public {
+        StealthBuy.Stealth memory s = StealthBuy.Stealth(stealth, ephKey, viewTag, 0, 0.001 ether);
+        StealthBuy other = new StealthBuy(manager, IERC5564Announcer(ANNOUNCER)); // a second deployment
+        vm.startPrank(buyer);
+        uint256 out = sb.buy{value: 0.05 ether + 0.001 ether}(poolKey, s, "");
+        vm.expectRevert(StealthBuy.StealthAddressNotFresh.selector);
+        sb.buy{value: 0.05 ether + 0.001 ether}(poolKey, s, ""); // the same buy again
+        vm.expectRevert(StealthBuy.StealthAddressNotFresh.selector);
+        other.buy{value: 0.05 ether + 0.001 ether}(poolKey, s, ""); // ... or through another router
+        vm.stopPrank();
+        assertEq(tkn.balanceOf(stealth), out, "still exactly the first buy");
+        assertEq(stealth.balance, 0.001 ether, "still exactly the first tip");
+        assertEq(buyer.balance, 100 ether - 0.05 ether - 0.001 ether, "the replays cost the buyer nothing");
+    }
+
+    function test_prefundedWithOneWeiEthReverts() public {
+        vm.deal(stealth, 1);
+        vm.prank(buyer);
+        vm.expectRevert(StealthBuy.StealthAddressNotFresh.selector);
+        sb.buy{value: 0.05 ether}(poolKey, StealthBuy.Stealth(stealth, ephKey, viewTag, 0, 0), "");
+    }
+
+    function test_holdingOneWeiTokenReverts() public {
+        tkn.mint(stealth, 1);
+        vm.prank(buyer);
+        vm.expectRevert(StealthBuy.StealthAddressNotFresh.selector);
+        sb.buy{value: 0.05 ether}(poolKey, StealthBuy.Stealth(stealth, ephKey, viewTag, 0, 0), "");
+    }
+
+    function test_freshAddressStillWorks() public {
+        address fresh = makeAddr("fresh stealth");
+        assertEq(fresh.code.length, 0);
+        assertEq(fresh.balance, 0);
+        assertEq(tkn.balanceOf(fresh), 0);
+        vm.prank(buyer);
+        uint256 out =
+            sb.buy{value: 0.05 ether + 0.001 ether}(poolKey, StealthBuy.Stealth(fresh, ephKey, viewTag, 1, 0.001 ether), "");
+        assertGt(out, 0);
+        assertEq(tkn.balanceOf(fresh), out, "tokens on the fresh address");
+        assertEq(fresh.balance, 0.001 ether, "gas included");
+        assertEq(buyer.balance, 100 ether - 0.05 ether - 0.001 ether);
+        assertEq(address(sb).balance, 0);
+    }
 }

@@ -1,4 +1,4 @@
-// Reference accounting for the Unbroken and First Light boosts, Season 1 (v3, 8 Oct 2026).
+// Reference accounting for the Unbroken and First Light boosts, Season 1 (v3.1, 9 Oct 2026).
 // Both are about tokens, not wallets: each token carries the day it was bought, and whether it was bought in the
 // first hour (First Light).
 // - A buy adds tokens dated today.
@@ -6,6 +6,10 @@
 // - A transfer moves tokens pro rata across their ages; they keep their dates in the new wallet.
 // - The boost on a token ramps from 0 to +1.00 over its first 7 days held.
 // - First Light: tokens bought in the launch hour carry +0.50, under the same pro-rata rules.
+// - v3.1: shared contracts (NFT vaults, staking, lending, exchange wallets, any pool) are treated like the pool:
+//   tokens going in leave the ledger like a sale, tokens coming out are new, dated that day, without First Light.
+//   Ages cannot be pooled in a contract and handed to someone else. Wallets you control alone (EOA, Safe,
+//   ERC-4337 or EIP-7702 accounts) are wallets: moving there keeps every token's age.
 // Every step is linear in the amounts, so splitting a wallet (before a sale or at any time) changes nothing.
 // Amounts are integers (token wei). Pure functions: the indexer applies the same steps to every $EPH transfer.
 
@@ -105,3 +109,19 @@ export const totalFirstLight = (l: Ledger) => [...l.keys()].reduce((s, w) => s +
 export const totalWeight7 = (l: Ledger, today: number) => [...l.keys()].reduce((s, w) => s + weight7(l, w, today), 0n);
 export const totalSeasoned = (l: Ledger, today: number) => totalWeight7(l, today) / BigInt(RAMP_DAYS);
 export const totalBalance = (l: Ledger) => [...l.keys()].reduce((s, w) => s + balanceOf(l, w), 0n);
+
+/** How the indexer classes an address (v3.1). */
+export type Kind = 'wallet' | 'shared';
+
+/**
+ * One $EPH transfer, as the indexer applies it (v3.1).
+ * wallet -> wallet: tokens keep their ages (pro rata). wallet -> shared: like a sale. shared -> wallet: like a buy
+ * dated `day`; `firstLight` is set only for buys from the official pool in the launch hour. shared -> shared: nothing.
+ */
+export function move(l: Ledger, from: string, to: string, amount: bigint, day: number, kindOf: (a: string) => Kind, firstLight = false): void {
+  const f = kindOf(from);
+  const t = kindOf(to);
+  if (f === 'wallet' && t === 'wallet') return transfer(l, from, to, amount);
+  if (f === 'wallet') sell(l, from, amount);
+  if (t === 'wallet') buy(l, to, amount, day, firstLight);
+}

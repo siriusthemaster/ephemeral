@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getAddress, type Hex } from 'viem';
-import { withdrawChecks, blocking, warnings, destinationsFromHistory } from './guards.ts';
+import { withdrawChecks, blocking, warnings, destinationsFromHistory, type GuardInput } from './guards.ts';
 
 const base = {
   stealthAddress: '0x1111111111111111111111111111111111111111',
@@ -9,6 +9,7 @@ const base = {
   payer: '0x3333333333333333333333333333333333333333',
   ownStealthAddresses: ['0x1111111111111111111111111111111111111111', '0x4444444444444444444444444444444444444444'],
   usedDestinations: ['0x5555555555555555555555555555555555555555'],
+  historyComplete: true,
   receivedAt: Date.now() - 2 * 3600_000,
   isToken: false,
   hasGas: true,
@@ -99,7 +100,18 @@ test('history incomplete: a destination is never called unused while history is 
   // a known reuse still says so, even with incomplete history
   assert.equal(h3(withdrawChecks({ ...fresh, destination: X, usedDestinations: [X], historyComplete: false })), 'warn');
   assert.match(withdrawChecks({ ...fresh, destination: X, usedDestinations: [X], historyComplete: false }).find((c) => c.id === 'H3')!.text, /already sent/);
-  // complete history (or the default) keeps the clean result for a fresh destination
+  // complete history keeps the clean result for a fresh destination
   assert.equal(h3(withdrawChecks({ ...fresh, historyComplete: true })), 'ok');
-  assert.equal(h3(withdrawChecks(fresh)), 'ok');
+});
+test('history completeness omitted: counts as incomplete (fail safe), H3 warns', () => {
+  // the type requires historyComplete; a caller that leaves it out anyway (plain JS, a loose cast) must not get "unused"
+  const { historyComplete: _, ...omitted } = { ...base, destination: Y as string, stealthAddress: S2, ownStealthAddresses: [S1, S2], usedDestinations: [] as Hex[] };
+  for (const g of [omitted, { ...omitted, historyComplete: undefined }]) {
+    const c = withdrawChecks(g as unknown as GuardInput);
+    const h = c.find((x) => x.id === 'H3')!;
+    assert.equal(h.level, 'warn');
+    assert.match(h.text, /history incomplete/);
+    assert.deepEqual(warnings(c).map((x) => x.id), ['H3'], 'the only warning');
+    assert.equal(blocking(c), false);
+  }
 });

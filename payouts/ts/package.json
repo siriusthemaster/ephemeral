@@ -1,0 +1,20 @@
+{
+  "name": "stealth-payout-ts",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Toy StealthPayout: epoch payout plan (ERC-5564 stealth addresses + commitments), holder-side scan, private proof of entitlement.",
+  "scripts": {
+    "test": "node --experimental-strip-types --test *.test.ts",
+    "fixture": "node --experimental-strip-types fixture.ts > ../test/fixtures/epoch7.json"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
+    "viem": "^2.57.3"
+  }
+}

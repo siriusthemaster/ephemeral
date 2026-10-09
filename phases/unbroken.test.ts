@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buy, sell, transfer, seasoned, unbrokenBoost, balanceOf, totalSeasoned, totalWeight7, totalBalance, firstLightTokens, totalFirstLight, type Ledger } from './unbroken.ts';
+import { buy, sell, transfer, move, seasoned, unbrokenBoost, balanceOf, totalSeasoned, totalWeight7, totalBalance, firstLightTokens, totalFirstLight, type Ledger, type Kind } from './unbroken.ts';
 
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -132,5 +132,67 @@ test('property: random transfers never change the First Light total', () => {
     if (bal === 0n) continue;
     transfer(l, from, ws[Math.floor(r() * 4)], r() < 0.1 ? 1n : (bal * BigInt(Math.floor(r() * 1000))) / 1000n);
     assert.equal(totalFirstLight(l), fl);
+  }
+});
+
+// v3.1, Claus Lab probe (9 Oct): NFT minting and redemption. A vault that holds tokens for many people is one address,
+// so a plain transfer would hand out its tokens' ages pro rata: deposit fresh tokens next to aged ones, redeem, and
+// walk away with aged tokens. In v3.1 a shared contract is treated like the pool.
+const SHARED = new Set(['vault', 'staking', 'cex']);
+const kindOf = (a: string): Kind => (SHARED.has(a) ? 'shared' : 'wallet');
+
+test('Claus Lab probe (NFT mint and redeem through a shared vault): fresh tokens deposited next to aged ones come out fresh', () => {
+  const l: Ledger = new Map();
+  buy(l, 'A', 1_000_000n * E, 0, true); // launch-hour buyer
+  move(l, 'A', 'vault', 1_000_000n * E, 8, kindOf); // A mints vault NFTs with aged First Light tokens
+  buy(l, 'B', 100_000n * E, 8); // B buys fresh
+  move(l, 'B', 'vault', 100_000n * E, 8, kindOf); // B mints...
+  move(l, 'vault', 'B', 100_000n * E, 8, kindOf); // ...and redeems right away
+  assert.equal(seasoned(l, 'B', 8), 0n);
+  assert.equal(firstLightTokens(l, 'B'), 0n);
+  assert.equal(seasoned(l, 'B', 15), 100_000n * E); // the normal 7-day ramp, nothing borrowed from A
+  // the cost of shared custody: A's redeemed tokens start again at day 0 and lose First Light
+  move(l, 'vault', 'A', 1_000_000n * E, 9, kindOf);
+  assert.equal(seasoned(l, 'A', 9), 0n);
+  assert.equal(firstLightTokens(l, 'A'), 0n);
+});
+
+test('a wallet you control alone (Safe, 4337, 7702) is a wallet: moving there keeps age and First Light', () => {
+  const l: Ledger = new Map();
+  buy(l, 'A', 50_000n * E, 0, true);
+  move(l, 'A', 'safeOfA', 50_000n * E, 5, kindOf);
+  assert.equal(seasoned(l, 'safeOfA', 7), 50_000n * E);
+  assert.equal(firstLightTokens(l, 'safeOfA'), 50_000n * E);
+});
+
+test('property: no sequence of moves through shared contracts raises the Unbroken weight or the First Light total', () => {
+  const r = rng(91);
+  const l: Ledger = new Map();
+  const wallets = ['a', 'b', 'c', 'd', 'e'];
+  const held = new Map<string, bigint>([...SHARED].map((s) => [s, 0n]));
+  for (const w of wallets) buy(l, w, BigInt(1 + Math.floor(r() * 1e6)) * E, Math.floor(r() * 5), r() < 0.5);
+  let day = 6;
+  for (let i = 0; i < 4_000; i++) {
+    if (r() < 0.01) day++;
+    const w = wallets[Math.floor(r() * wallets.length)];
+    const s = [...SHARED][Math.floor(r() * SHARED.size)];
+    const w7 = totalWeight7(l, day);
+    const fl = totalFirstLight(l);
+    const op = r();
+    if (op < 0.4) {
+      const amt = (balanceOf(l, w) * BigInt(Math.floor(r() * 1000))) / 1000n;
+      move(l, w, s, amt, day, kindOf);
+      held.set(s, held.get(s)! + amt);
+    } else if (op < 0.8) {
+      const amt = (held.get(s)! * BigInt(Math.floor(r() * 1000))) / 1000n;
+      move(l, s, w, amt, day, kindOf);
+      held.set(s, held.get(s)! - amt);
+    } else {
+      const to = wallets[Math.floor(r() * wallets.length)];
+      move(l, w, to, (balanceOf(l, w) * BigInt(Math.floor(r() * 1000))) / 1000n, day, kindOf);
+      assert.equal(totalWeight7(l, day), w7); // wallet to wallet: exactly neutral
+    }
+    assert.ok(totalWeight7(l, day) <= w7, `step ${i}: weight rose`);
+    assert.ok(totalFirstLight(l) <= fl, `step ${i}: First Light rose`);
   }
 });
