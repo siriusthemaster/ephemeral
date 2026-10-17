@@ -36,16 +36,15 @@ trading Phases = 100 per 0.001 ETH of swap fees the wallet paid on the official 
 | First Light | +0.50 | on tokens bought in the launch hour; they keep it when moved; a sale removes it pro rata; kept in later seasons |
 | Unbroken | +1.00 | on tokens held without being sold: ramps from 0 to +1.00 over a token's first 7 days; tokens keep their age when moved; a sale removes tokens pro rata across their ages; rebought tokens start at day 0 |
 
-## Rewards at the end of the season
-- **$TIDE airdrop:** 20% of $TIDE supply, pro rata by Phases.
-- **First Light Pass:** wallets with at least 50,000 Phases. Half of the $TIDE presale is reserved for Pass holders, pro rata by Phases. First relayer slots go to Pass holders, in order of Phases.
+## Rewards
+- Phases rewards are paused and will be announced no earlier than 25 Nov 2026. Until then, Phases keep counting under the Season 1 rules on this page.
+- Phases have no cash value. Nothing on this page is a promise of a token, an airdrop or a sale.
 
 ## Why splitting a wallet does not pay
 - base is linear in tokens × time, so splitting is neutral on base;
 - the tier multiplier never decreases with balance, so every part of a split sits in the same tier or a lower one;
 - boosts multiply each wallet's own base, so more wallets do not add boost;
 - Unbroken and First Light travel with the tokens, pro rata, and a sale removes tokens pro rata too, so splitting (before a sale or at any time) and moving to a safer wallet neither gain nor lose anything;
-- presale and airdrop are pro rata by Phases, not per wallet or per Pass.
 
 So a split can tie or lose, never win. If you find a sequence that wins, open an issue.
 
