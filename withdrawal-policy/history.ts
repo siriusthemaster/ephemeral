@@ -198,9 +198,30 @@ export function jsonRpcNode(url: string): NodeReader {
 }
 
 /**
+ * The on-chain nonces by lowercase address, from a map whose keys may be in any case (lowercase, checksummed).
+ * A value that is not a non-negative safe integer (a failed read such as -1, NaN, a string) is no nonce: the address
+ * maps to null. Two keys for one address: any unusable value makes it null, else the larger nonce counts (stricter).
+ */
+function nonceMap(sentCount: Record<string, number> | null | undefined): Map<string, number | null> {
+  const out = new Map<string, number | null>();
+  if (!sentCount || typeof sentCount !== 'object') return out;
+  for (const [k, v] of Object.entries(sentCount)) {
+    const key = k.toLowerCase();
+    const prev = out.get(key);
+    const usable = typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+    if (!usable || prev === null) out.set(key, null);
+    else if (prev === undefined || v > prev) out.set(key, v);
+  }
+  return out;
+}
+
+/**
  * Reads where the given addresses sent funds. `ok` is false when any address could not be read (or the network has
  * no Blockscout), and also when the explorer is behind the chain, checked two ways:
- * - `sentCount` (the on-chain nonce from RPC) says an address signed more transactions than the explorer has indexed;
+ * - `sentCount` (the on-chain nonce from RPC) says an address signed more transactions than the explorer has indexed.
+ *   It is required: it maps every address of `addresses` to its nonce, keys in any case. An address without a usable
+ *   entry (missing, a failed read, not a non-negative integer) cannot be checked against the chain, so `ok` is false
+ *   (fail safe: an ETH withdrawal the explorer has not indexed yet is only caught here);
  * - `tokenLogs`: the node's Transfer logs from an address include one the explorer's token transfers do not. That
  *   catches what the nonce cannot: a token transfer not indexed yet although its transaction is, and a token transfer
  *   relayed for the address (permit, transferWithAuthorization), which does not use its nonce.
@@ -211,10 +232,11 @@ export async function loadWithdrawalHistory(
   net: Net,
   addresses: Hex[],
   signal?: AbortSignal,
-  sentCount: Record<string, number> = {},
+  sentCount?: Record<string, number>,
   tokenLogs?: TokenLogCheck,
 ): Promise<{ history: Transfer[]; ok: boolean }> {
   if (!addresses.length) return { history: [], ok: true };
+  const nonces = nonceMap(sentCount);
   const base = net.blockscout;
   if (!base) return { history: [], ok: false };
   const history: Transfer[] = [];
@@ -229,8 +251,10 @@ export async function loadWithdrawalHistory(
       try {
         const r = await sentBy(base, a, signal);
         history.push(...r.out);
-        const expected = sentCount[a.toLowerCase()];
-        if (expected !== undefined && r.txCount < expected) ok = false; // explorer lags the chain: history incomplete
+        const expected = nonces.get(a.toLowerCase());
+        // no usable nonce: the explorer cannot be checked against the chain, so the history is incomplete (fail safe)
+        if (expected === undefined || expected === null) ok = false;
+        else if (r.txCount < expected) ok = false; // explorer lags the chain: history incomplete
         if (tokenLogs && latest !== null && (await unindexedTokenTransfers(tokenLogs, a, latest, r.indexed, signal)) > 0)
           ok = false; // a token transfer on chain is missing from the explorer: history incomplete
       } catch {
