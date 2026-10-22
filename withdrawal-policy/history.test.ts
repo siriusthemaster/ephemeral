@@ -46,13 +46,18 @@ test('loader: ETH sends with value and token transfers, across pages; zero-value
       return json({ items: [{ from: { hash: S1 }, to: { hash: X } }], next_page_params: null });
     return json({ message: 'Not found' }, 404);
   }) as typeof fetch;
-  const r = await loadWithdrawalHistory(net, [S1, S2], undefined, {}, noTokenLogs);
+  // the on-chain nonces of both addresses: S1 signed the 3 transactions the explorer lists, S2 none
+  const r = await loadWithdrawalHistory(net, [S1, S2], undefined, { [S1]: 3, [S2]: 0 }, noTokenLogs);
   assert.equal(r.ok, true);
   assert.deepEqual(r.history, [
     { from: S1, to: X },
     { from: S1, to: X },
   ]);
   assert.ok(seen.every((u) => u.startsWith('https://eth.blockscout.com/api/v2/addresses/')));
+  // without the nonces ({}, the old default) the same reads cannot be checked against the chain: history incomplete
+  const noNonces = await loadWithdrawalHistory(net, [S1, S2], undefined, {}, noTokenLogs);
+  assert.equal(noNonces.ok, false);
+  assert.deepEqual(noNonces.history, r.history, 'keeps what did load');
 });
 
 test('loader: a failing address makes ok false but keeps what loaded', async () => {
@@ -61,7 +66,7 @@ test('loader: a failing address makes ok false but keeps what loaded', async () 
     if (u.includes('/transactions')) return json({ items: [{ from: { hash: S1 }, to: { hash: X }, value: '1' }], next_page_params: null });
     return json({ items: [], next_page_params: null });
   }) as typeof fetch;
-  const r = await loadWithdrawalHistory(net, [S1, S2], undefined, {}, noTokenLogs);
+  const r = await loadWithdrawalHistory(net, [S1, S2], undefined, { [S1]: 1, [S2]: 0 }, noTokenLogs);
   assert.equal(r.ok, false);
   assert.deepEqual(r.history, [{ from: S1, to: X }]);
 });
@@ -86,7 +91,7 @@ test('loader: at most 3 requests in flight', async () => {
     return json({ items: [], next_page_params: null });
   }) as typeof fetch;
   const many = Array.from({ length: 10 }, (_, i) => `0x${(i + 1).toString(16).padStart(40, '0')}` as Hex);
-  const r = await loadWithdrawalHistory(net, many, undefined, {}, noTokenLogs);
+  const r = await loadWithdrawalHistory(net, many, undefined, Object.fromEntries(many.map((a) => [a, 0])), noTokenLogs);
   assert.equal(r.ok, true);
   assert.equal(peak, 3);
 });
@@ -195,7 +200,7 @@ test('loader: a node that refuses large ranges gets smaller ones; no node, or an
     },
     fromBlock: 10_001n,
   };
-  assert.equal((await loadWithdrawalHistory(net, [S1], undefined, {}, picky)).ok, true);
+  assert.equal((await loadWithdrawalHistory(net, [S1], undefined, { [S1]: 0 }, picky)).ok, true);
   assert.equal(ranges[0][0], 10_001n);
   assert.equal(ranges.at(-1)![1], 20_000n);
   for (let i = 0; i < ranges.length; i++) {
@@ -205,9 +210,9 @@ test('loader: a node that refuses large ranges gets smaller ones; no node, or an
 
   assert.equal((await loadWithdrawalHistory(net, [S1])).ok, false, 'no node: token transfers cannot be confirmed');
   const down: TokenLogCheck = { node: { blockNumber: async () => 100n, getLogs: async () => Promise.reject(new Error('down')) }, fromBlock: 0n };
-  assert.equal((await loadWithdrawalHistory(net, [S1], undefined, {}, down)).ok, false, 'logs unreadable');
+  assert.equal((await loadWithdrawalHistory(net, [S1], undefined, { [S1]: 0 }, down)).ok, false, 'logs unreadable');
   const noHead: TokenLogCheck = { node: { blockNumber: async () => Promise.reject(new Error('down')), getLogs: async () => [] }, fromBlock: 0n };
-  assert.equal((await loadWithdrawalHistory(net, [S1], undefined, {}, noHead)).ok, false, 'head unreadable');
+  assert.equal((await loadWithdrawalHistory(net, [S1], undefined, { [S1]: 0 }, noHead)).ok, false, 'head unreadable');
 });
 
 test('jsonRpcNode: eth_blockNumber and eth_getLogs over plain JSON-RPC; RPC errors throw', async () => {
