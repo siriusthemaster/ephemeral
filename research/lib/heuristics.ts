@@ -82,7 +82,7 @@ interface Scope {
   /** only stealth addresses whose first payment is in [firstFrom, firstBefore) */
   firstFrom?: number;
   firstBefore?: number;
-  /** ignore withdrawals, fundings and registrations at or after this block */
+  /** ignore payments, withdrawals, fundings and registrations at or after this block */
   asOfBlock?: number;
 }
 
@@ -145,6 +145,7 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
   const byStealth = new Map<string, Payment[]>();
   for (const p of ds.payments) {
     if (!scope.sources.has(p.source)) continue;
+    if (scope.asOfBlock !== undefined && p.block >= scope.asOfBlock) continue;
     const list = byStealth.get(p.stealth);
     if (list) list.push(p);
     else byStealth.set(p.stealth, [p]);

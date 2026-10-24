@@ -8,7 +8,7 @@ Their Ethereum figure is **48.51%: 4,696 of 9,680 withdrawn Umbra stealth paymen
 
 | Field | Scope | Use |
 | --- | --- | --- |
-| `paperComparable` | Umbra payments, Umbra registrations and withdrawals before 2023-07-01 | should land near 48.51%: checks that this pipeline matches the paper |
+| `paperComparable` | Umbra payments, Umbra registrations, withdrawals and gas fundings before 2023-07-01; later data is ignored | should land near 48.51%: checks that this pipeline matches the paper |
 | `sinceCutoff` | Umbra + ERC-5564, first paid on or after 2023-07-01 | the leak rate since the study |
 | `all` | everything, full history | totals |
 | `byYear` | by year of first payment | the trend |
