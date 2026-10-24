@@ -3,7 +3,7 @@
  * "Anonymity Analysis of the Umbra Stealth Address Scheme on Ethereum" (2023), arXiv:2308.01703.
  *
  * H1 registrant reuse     a withdrawal goes to an address that registered stealth keys   -> stealth linked to identity
- * H2 same sender/receiver the withdrawal goes back to the payment's sender              -> stealth linked to identity
+ * H2 same sender/receiver the paid asset goes back to the payment's sender             -> stealth linked to identity
  * H3 collector pattern    several stealth addresses withdraw to the same recipient     -> stealth addresses clustered
  * H4 unique priority fee  withdrawals share a rarely used maxPriorityFeePerGas         -> stealth addresses clustered
  * H5 gas funding (ours)   gas ETH came from a registrant or from the final recipient   -> stealth linked to identity
@@ -123,6 +123,7 @@ interface StealthView {
   senders: Set<string>;
   tokens: Set<string>;
   paymentTxs: Set<string>;
+  assets: Set<Asset>;
   primary: Asset;
   /** accepted withdrawals, in scope */
   accepted: Withdrawal[];
@@ -134,10 +135,17 @@ function primaryAsset(assets: Set<Asset>): Asset {
   return 'UNKNOWN';
 }
 
-function isPrimary(w: Withdrawal, primary: Asset): boolean {
-  if (primary === 'ETH') return w.kind === 'eth';
-  if (primary === 'TOKEN') return w.kind === 'token' || w.kind === 'umbra-token';
+/** The asset that decides "withdrawn" left: ETH for an ETH payment, the paid token contract for a token payment. */
+function isPrimary(w: Withdrawal, v: StealthView): boolean {
+  if (v.primary === 'ETH') return w.kind === 'eth';
+  if (v.primary === 'TOKEN') return w.kind !== 'eth' && w.token !== null && v.tokens.has(w.token);
   return true;
+}
+
+/** Any asset that was paid in left. An unknown asset (metadata with an unknown selector) cannot be ruled out. */
+function isPaidAsset(w: Withdrawal, v: StealthView): boolean {
+  if (v.assets.has('UNKNOWN')) return true;
+  return w.kind === 'eth' ? v.assets.has('ETH') : w.token !== null && v.tokens.has(w.token);
 }
 
 /** Group payments per stealth address and keep only withdrawals the owner actually made after being paid. */
@@ -163,6 +171,7 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
     if (scope.firstFrom !== undefined && firstBlock < scope.firstFrom) continue;
     if (scope.firstBefore !== undefined && firstBlock >= scope.firstBefore) continue;
     const first = ps.find((p) => p.block === firstBlock) as Payment;
+    const assets = new Set(ps.map((p) => p.asset));
     const v: StealthView = {
       addr,
       firstBlock,
@@ -170,7 +179,8 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
       senders: new Set(ps.map((p) => p.sender).filter((s) => s !== '')),
       tokens: new Set(ps.map((p) => p.token).filter((t): t is string => t !== null)),
       paymentTxs: new Set(ps.map((p) => p.txHash)),
-      primary: primaryAsset(new Set(ps.map((p) => p.asset))),
+      assets,
+      primary: primaryAsset(assets),
       accepted: [],
     };
     const isSmartAccount = ds.contracts.has(addr) || ds.delegated.has(addr);
@@ -227,17 +237,19 @@ function measure(ds: Dataset, scope: Scope, only?: (v: StealthView) => boolean):
   for (const v of views(ds, scope)) {
     if (only && !only(v)) continue;
     m.stealthAddresses++;
-    const primaryTxs = new Set(v.accepted.filter((w) => isPrimary(w, v.primary)).map((w) => w.txHash));
+    const primaryTxs = new Set(v.accepted.filter((w) => isPrimary(w, v)).map((w) => w.txHash));
     if (primaryTxs.size === 0) continue;
     m.withdrawn++;
     const allDests = new Set(v.accepted.map((w) => w.to).filter((d) => d !== v.addr));
+    // H2 is a round trip of the paid asset: an unrelated token sent to the payer does not count.
+    const paidDests = new Set(v.accepted.filter((w) => isPaidAsset(w, v)).map((w) => w.to).filter((d) => d !== v.addr));
 
     let h1s = false;
     let h2s = false;
     if (primaryTxs.size === 1) {
       m.singleWithdrawal++;
       const tx = [...primaryTxs][0];
-      const dests = v.accepted.filter((w) => w.txHash === tx && isPrimary(w, v.primary)).map((w) => w.to);
+      const dests = v.accepted.filter((w) => w.txHash === tx && isPrimary(w, v)).map((w) => w.to);
       h1s = dests.some((d) => regs.has(d));
       h2s = dests.some((d) => v.senders.has(d));
     }
@@ -246,7 +258,7 @@ function measure(ds: Dataset, scope: Scope, only?: (v: StealthView) => boolean):
     if (h1s || h2s) m.paperLinked++;
 
     const h1a = [...allDests].some((d) => regs.has(d));
-    const h2a = [...allDests].some((d) => v.senders.has(d));
+    const h2a = [...paidDests].some((d) => v.senders.has(d));
     if (h1a) m.h1Any++;
     if (h2a) m.h2Any++;
 
@@ -302,11 +314,11 @@ export function analyze(ds: Dataset, opts: AnalyzeOptions): Analysis {
   const groups = new Map<string, number>();
   let single = 0;
   for (const v of allViews) {
-    const primaryTxs = new Set(v.accepted.filter((w) => isPrimary(w, v.primary)).map((w) => w.txHash));
+    const primaryTxs = new Set(v.accepted.filter((w) => isPrimary(w, v)).map((w) => w.txHash));
     if (primaryTxs.size !== 1) continue;
     single++;
     const tx = [...primaryTxs][0];
-    const dests = new Set(v.accepted.filter((w) => w.txHash === tx && isPrimary(w, v.primary)).map((w) => w.to));
+    const dests = new Set(v.accepted.filter((w) => w.txHash === tx && isPrimary(w, v)).map((w) => w.to));
     if (dests.size !== 1) continue;
     const d = [...dests][0] as string;
     if (ds.contracts.has(d) || d === v.addr) continue;
