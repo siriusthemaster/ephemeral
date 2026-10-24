@@ -48,6 +48,7 @@ function h3(own: Hex[], r: { history: { from: string; to: string }[]; ok: boolea
     destination,
     stealthAddress: from,
     walletAddress: W,
+    payer: undefined, // required input; only H3 is read here
     ownStealthAddresses: own,
     usedDestinations: destinationsFromHistory(own, r.history),
     historyComplete: r.ok,

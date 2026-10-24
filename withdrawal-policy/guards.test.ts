@@ -152,3 +152,50 @@ test('control: addresses next to the blocked ones pass clean', () => {
     assert.equal(warnings(c).length, 0, d);
   }
 });
+
+// ------------------------------------------------------------------ fail closed when the key wallet or the payer is missing
+
+const clean = { ...fresh, destination: '0x6666666666666666666666666666666666666666' };
+
+test('H1 fail closed: a missing key wallet blocks every destination', () => {
+  for (const walletAddress of [undefined, '' as Hex, '0x2222' as Hex, 'not an address' as Hex]) {
+    for (const isToken of [false, true]) {
+      const c = withdrawChecks({ ...clean, walletAddress, isToken });
+      const h1 = c.find((x) => x.id === 'H1')!;
+      assert.equal(h1.level, 'block', String(walletAddress));
+      assert.match(h1.text, /cannot check, key wallet unknown/);
+      assert.equal(blocking(c), true);
+    }
+  }
+  // left out entirely by a loose caller (plain JS, a cast): same
+  const { walletAddress: _w, ...omitted } = clean;
+  const c = withdrawChecks(omitted as unknown as GuardInput);
+  assert.equal(c.find((x) => x.id === 'H1')!.level, 'block');
+  assert.equal(blocking(c), true);
+});
+test('H2 fail closed: a missing payer blocks every destination, and Withdraw stays locked', () => {
+  for (const payer of [undefined, '' as Hex, '0x3333' as Hex, 'not an address' as Hex]) {
+    for (const isToken of [false, true]) {
+      const c = withdrawChecks({ ...clean, payer, isToken });
+      const h2 = c.find((x) => x.id === 'H2')!;
+      assert.equal(h2.level, 'block', String(payer));
+      assert.match(h2.text, /cannot check, payer unknown. Withdraw stays locked until the payer is known/);
+      assert.equal(blocking(c), true);
+    }
+  }
+  const { payer: _p, ...omitted } = clean;
+  const c = withdrawChecks(omitted as unknown as GuardInput);
+  assert.equal(c.find((x) => x.id === 'H2')!.level, 'block');
+  assert.equal(blocking(c), true);
+});
+test('control: with the key wallet and the payer known, H1 and H2 behave as before', () => {
+  const c = withdrawChecks(clean);
+  assert.deepEqual(c.map((x) => `${x.id}:${x.level}`), ['H1:ok', 'H2:ok', 'H3:ok', 'H4:ok', 'H5:ok']);
+  // any letter case of a known input counts as known
+  assert.equal(blocking(withdrawChecks({ ...clean, walletAddress: getAddress(base.walletAddress), payer: base.payer.toUpperCase().replace('0X', '0x') as Hex })), false);
+  // the payer itself still only warns (H2 level unchanged), the key wallet still blocks
+  const back = withdrawChecks({ ...clean, destination: base.payer });
+  assert.equal(back.find((x) => x.id === 'H2')!.level, 'warn');
+  assert.equal(blocking(back), false);
+  assert.equal(withdrawChecks({ ...clean, destination: base.walletAddress }).find((x) => x.id === 'H1')!.level, 'block');
+});

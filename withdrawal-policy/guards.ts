@@ -7,8 +7,8 @@ export type Check = { id: string; level: Level; text: string };
 export type GuardInput = {
   destination: string;
   stealthAddress: Hex;
-  walletAddress?: Hex; // the wallet that signed the keys (and maybe registered them)
-  payer?: Hex; // who sent the payment
+  walletAddress: Hex | undefined; // required: the wallet that signed the keys (and maybe registered them). Unknown = undefined, and H1 blocks
+  payer: Hex | undefined; // required: who sent the payment. Unknown = undefined, and H2 blocks
   ownStealthAddresses: Hex[]; // every stealth address of ours we know about
   usedDestinations: Hex[]; // destinations that other payments of yours were withdrawn to (rebuilt from chain history, plus this session)
   historyComplete: boolean; // true only once past withdrawals fully loaded; false while loading or unreadable. Missing = incomplete
@@ -19,6 +19,8 @@ export type GuardInput = {
 };
 
 const same = (a?: string, b?: string) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+// An input counts as known only when it is an address (any letter case). Missing, empty or malformed = unknown.
+const known = (a: unknown): a is Hex => typeof a === 'string' && isAddress(a, { strict: false });
 
 // Destinations nothing ever comes back from. Lowercase keys; a Map, so no key hits Object.prototype.
 const UNSPENDABLE = new Map([
@@ -35,18 +37,22 @@ export function withdrawChecks(g: GuardInput): Check[] {
   if (!isAddress(g.destination)) return [{ id: 'addr', level: 'block', text: 'Enter a valid Ethereum address.' }];
   if (same(g.destination, g.stealthAddress)) out.push({ id: 'self', level: 'block', text: 'That is the payment address itself.' });
 
-  // H1 registrant reuse
+  // H1 registrant reuse. Fail closed: while the key wallet is unknown, no destination can be checked against it.
   if (same(g.destination, g.walletAddress))
     out.push({
       id: 'H1',
       level: 'block',
       text: 'H1: this is the wallet that created your stealth keys. Withdrawing here links the payment to you directly.',
     });
+  else if (!known(g.walletAddress))
+    out.push({ id: 'H1', level: 'block', text: 'H1: cannot check, key wallet unknown. Withdraw stays locked until the key wallet is known.' });
   else out.push({ id: 'H1', level: 'ok', text: 'H1: not your key wallet.' });
 
-  // H2 round trip
+  // H2 round trip. Fail closed: while the payer is unknown, nothing can be ruled out. A known payer warns, as before.
   if (same(g.destination, g.payer))
     out.push({ id: 'H2', level: 'warn', text: 'H2: this address sent you the payment. Sending it back links both ends.' });
+  else if (!known(g.payer))
+    out.push({ id: 'H2', level: 'block', text: 'H2: cannot check, payer unknown. Withdraw stays locked until the payer is known.' });
   else out.push({ id: 'H2', level: 'ok', text: 'H2: not the payer.' });
 
   // H3 collector
