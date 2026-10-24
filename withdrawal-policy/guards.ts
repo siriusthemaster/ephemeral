@@ -20,8 +20,18 @@ export type GuardInput = {
 
 const same = (a?: string, b?: string) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 
+// Destinations nothing ever comes back from. Lowercase keys; a Map, so no key hits Object.prototype.
+const UNSPENDABLE = new Map([
+  ['0x0000000000000000000000000000000000000000', 'the zero address'],
+  ['0x000000000000000000000000000000000000dead', 'the 0x…dEaD burn address'],
+  ['0x55649e01b5df198d18d95b5cc5051630cfd45564', 'the ERC-5564 Announcer contract'],
+  ['0x6538e6bf4b0ebd30a8ea093027ac2422ce5d6538', 'the ERC-6538 Registry contract'],
+]);
+
 export function withdrawChecks(g: GuardInput): Check[] {
   const out: Check[] = [];
+  const unspendable = typeof g.destination === 'string' ? UNSPENDABLE.get(g.destination.toLowerCase()) : undefined;
+  if (unspendable) return [{ id: 'burn', level: 'block', text: `That is ${unspendable}. Funds sent there are lost for good.` }];
   if (!isAddress(g.destination)) return [{ id: 'addr', level: 'block', text: 'Enter a valid Ethereum address.' }];
   if (same(g.destination, g.stealthAddress)) out.push({ id: 'self', level: 'block', text: 'That is the payment address itself.' });
 

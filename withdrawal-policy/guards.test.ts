@@ -115,3 +115,40 @@ test('history completeness omitted: counts as incomplete (fail safe), H3 warns',
     assert.equal(blocking(c), false);
   }
 });
+
+// ------------------------------------------------------------------ unspendable destinations (Toshit, C-01)
+
+const UNSPENDABLE = [
+  '0x0000000000000000000000000000000000000000', // zero address
+  '0x000000000000000000000000000000000000dEaD', // burn address
+  '0x55649E01B5Df198D18D95b5cc5051630cfD45564', // ERC-5564 Announcer
+  '0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538', // ERC-6538 Registry
+];
+const fresh = { ...base, ownStealthAddresses: [...base.ownStealthAddresses], usedDestinations: [...base.usedDestinations] };
+
+test('burn and protocol addresses are blocked, in any case, and nothing else is reported for them', () => {
+  for (const addr of UNSPENDABLE) {
+    for (const destination of [addr, addr.toLowerCase(), '0x' + addr.slice(2).toUpperCase(), getAddress(addr)]) {
+      for (const isToken of [false, true]) {
+        const c = withdrawChecks({ ...fresh, destination, isToken });
+        assert.equal(blocking(c), true, destination);
+        assert.deepEqual(c.map((x) => [x.id, x.level]), [['burn', 'block']], destination);
+        assert.match(c[0]!.text, /lost/);
+      }
+    }
+  }
+});
+test('the block message names the address', () => {
+  const text = (d: string) => withdrawChecks({ ...fresh, destination: d })[0]!.text;
+  assert.match(text(UNSPENDABLE[0]!), /zero address/);
+  assert.match(text(UNSPENDABLE[1]!), /burn address/);
+  assert.match(text(UNSPENDABLE[2]!), /ERC-5564 Announcer/);
+  assert.match(text(UNSPENDABLE[3]!), /ERC-6538 Registry/);
+});
+test('control: addresses next to the blocked ones pass clean', () => {
+  for (const d of ['0x0000000000000000000000000000000000000001', '0x000000000000000000000000000000000000deae', '0x6666666666666666666666666666666666666666']) {
+    const c = withdrawChecks({ ...fresh, destination: d });
+    assert.equal(blocking(c), false, d);
+    assert.equal(warnings(c).length, 0, d);
+  }
+});
