@@ -1,6 +1,8 @@
 # Withdrawal policy (H1–H5)
 
-The checks the ephemeral client runs before every withdrawal from a stealth address. Pure TypeScript, no network, about 90 lines: `guards.ts`.
+The checks the ephemeral client runs before every withdrawal from a stealth address. Pure TypeScript, no network, about 110 lines: `guards.ts`.
+
+First, a destination nothing comes back from is blocked before any other check: the zero address, `0x000000000000000000000000000000000000dEaD`, the ERC-5564 Announcer (`0x55649E01B5Df198D18D95b5cc5051630cfD45564`) and the ERC-6538 Registry (`0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538`), in any letter case. The result is that one block, with no H1–H5 lines.
 
 | Check                                                                                                                                                                                                                                                                                                                                                                              | Level                                                             | Why (mainnet scan of 25,645 stealth addresses)  |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------- |

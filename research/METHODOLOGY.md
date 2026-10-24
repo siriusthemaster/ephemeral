@@ -8,7 +8,7 @@ Their Ethereum figure is **48.51%: 4,696 of 9,680 withdrawn Umbra stealth paymen
 
 | Field | Scope | Use |
 | --- | --- | --- |
-| `paperComparable` | Umbra payments, Umbra registrations and withdrawals before 2023-07-01 | should land near 48.51%: checks that this pipeline matches the paper |
+| `paperComparable` | Umbra payments, Umbra registrations, withdrawals and gas fundings before 2023-07-01; later data is ignored | should land near 48.51%: checks that this pipeline matches the paper |
 | `sinceCutoff` | Umbra + ERC-5564, first paid on or after 2023-07-01 | the leak rate since the study |
 | `all` | everything, full history | totals |
 | `byYear` | by year of first payment | the trend |
@@ -37,10 +37,10 @@ The scan ends at the `finalized` block, so a lagging transfer index cannot chang
 - **Unit of analysis:** the stealth address. Several payments to one stealth address count once.
 - **Fresh:** a real stealth address has sent nothing before its first payment. Announced addresses that had (test or spam announcements to used wallets) are left out and counted in `quality.notFreshStealthAddresses`.
 - **Owned withdrawal:** a transfer out of the stealth address at or after its first payment, outside the payment transaction, that the owner made: signed by the stealth address, an Umbra `TokenWithdrawal`, any transfer of a smart-account or EIP-7702 delegated stealth address, or a relayed move (permit, relayer) of the token that was paid in. A scammer's fake-token transfer "from" the address does not count; nor does history from before the first payment.
-- **Withdrawn:** the paid asset left: ETH for an ETH payment, the token for a token payment.
+- **Withdrawn:** the paid asset left: ETH for an ETH payment, the same token contract for a token payment. Another token leaving does not count. When the metadata does not name the asset (unknown selector), any owned withdrawal counts.
 - **Single withdrawal:** the paid asset left in exactly one transaction. A later sweep of leftover gas does not break it. The paper counts payments emptied in one transaction; we do not check the remaining balance.
 - **H1, registrant reuse:** a recipient is a registrant. For `paperComparable`, only Umbra registrations before the cutoff; elsewhere, both registries.
-- **H2, same sender and receiver:** a recipient is the `from` of a payment to that stealth address. The paper states the single-withdrawal rule for H1; we apply it to H2 too (H2 adds few links either way).
+- **H2, same sender and receiver:** a recipient of a paid asset is the `from` of a payment to that stealth address. An unrelated token sent to the payer is not a round trip. The paper states the single-withdrawal rule for H1; we apply it to H2 too (H2 adds few links either way).
 - **Paper metric:** H1 or H2 on the single withdrawal, over all withdrawn.
 - **H3, collector pattern:** single withdrawals with one recipient, grouped by recipient; groups of two or more are clusters. Contract recipients (routers, the Umbra contract) are excluded to avoid false clusters.
 - **H4, unique priority fee:** fee-market withdrawals (type 2 or later) signed by the stealth address. A `maxPriorityFeePerGas` used by at most five such transactions is unique; stealth addresses sharing one are clustered. The paper excluded all token payments; here self-signed token withdrawals are included, relayed ones are not.
