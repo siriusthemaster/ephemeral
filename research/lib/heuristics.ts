@@ -122,6 +122,9 @@ interface StealthView {
   firstTs: number;
   senders: Set<string>;
   tokens: Set<string>;
+  /** tokens paid straight to the stealth address (ERC-5564). Umbra token payments sit in the Umbra contract instead and
+   *  leave only through TokenWithdrawal, so a direct transfer of the same token is not that payment leaving. */
+  directTokens: Set<string>;
   paymentTxs: Set<string>;
   assets: Set<Asset>;
   primary: Asset;
@@ -135,10 +138,15 @@ function primaryAsset(assets: Set<Asset>): Asset {
   return 'UNKNOWN';
 }
 
-/** The asset that decides "withdrawn" left: ETH for an ETH payment, the paid token contract for a token payment. */
+/** The asset that decides "withdrawn" left: ETH for an ETH payment, the paid token contract for a token payment.
+ *  For a token paid through Umbra only its TokenWithdrawal counts: the tokens wait in the Umbra contract, so a direct
+ *  transfer of the same token from the stealth address moves other tokens and must not break single-withdrawal status. */
 function isPrimary(w: Withdrawal, v: StealthView): boolean {
   if (v.primary === 'ETH') return w.kind === 'eth';
-  if (v.primary === 'TOKEN') return w.kind !== 'eth' && w.token !== null && v.tokens.has(w.token);
+  if (v.primary === 'TOKEN') {
+    if (w.kind === 'eth' || w.token === null || !v.tokens.has(w.token)) return false;
+    return w.kind === 'umbra-token' || v.directTokens.has(w.token);
+  }
   return true;
 }
 
@@ -178,6 +186,7 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
       firstTs: first.timestamp,
       senders: new Set(ps.map((p) => p.sender).filter((s) => s !== '')),
       tokens: new Set(ps.map((p) => p.token).filter((t): t is string => t !== null)),
+      directTokens: new Set(ps.filter((p) => p.source !== 'umbra').map((p) => p.token).filter((t): t is string => t !== null)),
       paymentTxs: new Set(ps.map((p) => p.txHash)),
       assets,
       primary: primaryAsset(assets),
