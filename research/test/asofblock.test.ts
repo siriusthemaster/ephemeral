@@ -100,7 +100,8 @@ test('control: the cutoff block is the boundary (C - 1 counts, C does not)', () 
 });
 
 test('control: tokens paid before the cutoff still let a relayed move count', () => {
-  const ds = world([pay(A1, C - 2_000, 1, T0), pay(A3, C - 1_500, 2, T1)], [out(D1, C - 1_000, 101, 'token', T1, RELAYER)]);
+  // an Umbra token payment leaves through a relayed TokenWithdrawal (umbra-token), not a Transfer from the stealth address
+  const ds = world([pay(A1, C - 2_000, 1, T0), pay(A3, C - 1_500, 2, T1)], [out(D1, C - 1_000, 101, 'umbra-token', T1, RELAYER)]);
   const r = analyze(ds, opts).paperComparable;
   assert.equal(r.withdrawn, 1);
   assert.equal(r.singleWithdrawal, 1);

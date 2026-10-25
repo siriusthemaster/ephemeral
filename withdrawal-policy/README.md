@@ -22,7 +22,7 @@ The client never offers the key wallet as a destination and has no sweep-all but
 
 Run the tests (Node 22+, `viem` installed):
 ```
-npm i viem && node --experimental-strip-types --test guards.test.ts history.test.ts h3-sentcount.test.ts
+npm i viem && node --experimental-strip-types --test guards.test.ts history.test.ts h3-sentcount.test.ts h3-zero-value-erc1155.test.ts
 ```
 
 Study and numbers: the leak study in this repo. MIT.
@@ -32,3 +32,7 @@ Study and numbers: the leak study in this repo. MIT.
 The nonces (`sentCount`) are required, not optional: every address read needs a usable on-chain nonce, keys in any case (lowercase or checksummed). A missing entry, a failed read (for example -1) or any value that is not a non-negative integer means the explorer cannot be checked against the chain, so history counts as incomplete and H3 never says "unused" (22 Oct: before, a missing entry skipped the check; `h3-sentcount.test.ts` covers it).
 
 Token transfers are checked against the node too (Claus Lab review, 9 Oct: "the tx count can match while the reused destination is still missing from history"). `history.ts` reads every ERC-20 `Transfer` log with `from` = the address straight from the node (`eth_getLogs`, topic 1 = the address, from its first payment block to the latest block, in ranges of 10,000 blocks, smaller if the node refuses), and looks each one up among the token transfers the explorer has indexed (same transaction hash and log index). One that the explorer does not show yet makes the history incomplete, and H3 says so. The nonce cannot catch this: a transaction can be indexed before its token transfer, and a transfer relayed for the address (permit, `transferWithAuthorization`) does not use its nonce. Without a node to compare against, or when it cannot be read, history also counts as incomplete. `history.test.ts` covers both cases: the transaction count matches but one relayed token transfer is not indexed yet (incomplete), and both are indexed (complete).
+
+ERC-1155 moves are checked the same way (bug bounty, 25 Oct): `TransferSingle` and `TransferBatch` logs carry `from` in topic 2, not topic 1, so `history.ts` also reads those two events with topic 2 = the address. An approved operator can move a stealth address's ERC-1155 token without using its nonce; if the explorer has not indexed that move yet, the history is incomplete and H3 says so.
+
+Zero-value transactions are no longer skipped (bug bounty, 25 Oct). Each one the address signed is read from its calldata: no calldata means a plain transaction, and its `to` counts as a past destination (a zero-value send to an address is still a public link); `transfer` or `transferFrom` of the address's own tokens adds the recipient, even when the token logs nothing; anything else (an approval, an unknown call, input that cannot be read) makes the history incomplete, because such a call can let tokens leave later without a trace the loader reads. `h3-zero-value-erc1155.test.ts` covers all of these.

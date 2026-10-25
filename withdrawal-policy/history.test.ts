@@ -19,6 +19,8 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const noTokenLogs: TokenLogCheck = { node: { blockNumber: async () => 100n, getLogs: async () => [] }, fromBlock: 0n };
 const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const topic = (a: string) => `0x${'0'.repeat(24)}${a.slice(2).toLowerCase()}`;
+/** Calldata of transfer(to, amount): how a stealth address sends its own tokens (the explorer's raw_input). */
+const transferInput = (to: string, amount = 1n) => `0xa9059cbb${topic(to).slice(2)}${amount.toString(16).padStart(64, '0')}`;
 /** A Transfer log as eth_getLogs returns it (hex log index). */
 const transferLog = (tx: string, logIndex: number, from: string, to: string): RpcLog => ({
   transactionHash: tx,
@@ -26,7 +28,7 @@ const transferLog = (tx: string, logIndex: number, from: string, to: string): Rp
   topics: [TRANSFER, topic(from), topic(to)],
 });
 
-test('loader: ETH sends with value and token transfers, across pages; zero-value calls skipped', async () => {
+test('loader: ETH sends with value and token transfers, across pages; a zero-value token call read from its calldata', async () => {
   const seen: string[] = [];
   globalThis.fetch = (async (u: string, init?: RequestInit) => {
     seen.push(u);
@@ -37,7 +39,7 @@ test('loader: ETH sends with value and token transfers, across pages; zero-value
     if (url.pathname.endsWith(`/addresses/${S1}/transactions`)) {
       if (!url.searchParams.get('block_number'))
         return json({
-          items: [{ from: { hash: S1 }, to: { hash: T }, value: '0' }],
+          items: [{ from: { hash: S1 }, to: { hash: T }, value: '0', raw_input: transferInput(X) }],
           next_page_params: { block_number: 5, index: 1, items_count: 50 },
         });
       return json({ items: [{ from: { hash: S1 }, to: { hash: X }, value: '1000' }, { from: { hash: S1 }, to: null, value: '5' }], next_page_params: null });
@@ -99,7 +101,7 @@ test('loader: at most 3 requests in flight', async () => {
 test('loader: explorer behind the chain (nonce says 2 sent, explorer shows 1) means history incomplete', async () => {
   globalThis.fetch = (async (u: string) => {
     if (u.includes(`/addresses/${S1}/transactions`))
-      return json({ items: [{ from: { hash: S1 }, to: { hash: T }, value: '0' }], next_page_params: null }); // only the token send is indexed
+      return json({ items: [{ from: { hash: S1 }, to: { hash: T }, value: '0', raw_input: transferInput(X) }], next_page_params: null }); // only the token send is indexed
     if (u.includes(`/addresses/${S1}/token-transfers`)) return json({ items: [{ from: { hash: S1 }, to: { hash: X } }], next_page_params: null });
     return json({ items: [], next_page_params: null });
   }) as typeof fetch;
@@ -118,7 +120,7 @@ test('loader: tx count matches, but a relayed token transfer is on chain and not
   let indexedB = false;
   globalThis.fetch = (async (u: string) => {
     if (u.includes(`/addresses/${S1}/transactions`))
-      return json({ items: [{ hash: A, from: { hash: S1 }, to: { hash: T }, value: '0' }], next_page_params: null });
+      return json({ items: [{ hash: A, from: { hash: S1 }, to: { hash: T }, value: '0', raw_input: transferInput(X) }], next_page_params: null });
     if (u.includes(`/addresses/${S1}/token-transfers`))
       return json({
         items: [
@@ -135,6 +137,7 @@ test('loader: tx count matches, but a relayed token transfer is on chain and not
       blockNumber: async () => 25_999n,
       getLogs: async (q) => {
         calls.push(q);
+        if (q.topics[0] !== TRANSFER) return []; // a truthful node: no ERC-1155 logs here
         const logs = [transferLog(A, 7, S1, X), transferLog(B, 3, S1, Y)];
         return logs.filter((_, i) => [12_000n, 24_000n][i] >= q.fromBlock && [12_000n, 24_000n][i] <= q.toBlock);
       },
@@ -148,7 +151,7 @@ test('loader: tx count matches, but a relayed token transfer is on chain and not
   assert.equal(lagging.ok, false, 'the transfer to Y is on chain but not in the explorer yet');
   assert.deepEqual(lagging.history, [{ from: S1, to: X }], 'keeps what did load');
   assert.deepEqual(
-    calls.map((c) => [c.fromBlock, c.toBlock]),
+    calls.filter((c) => c.topics[0] === TRANSFER).map((c) => [c.fromBlock, c.toBlock]),
     [
       [1_000n, 10_999n],
       [11_000n, 20_999n],
@@ -156,7 +159,11 @@ test('loader: tx count matches, but a relayed token transfer is on chain and not
     ],
     "from S1's first payment block to the head, in ranges of 10,000 blocks",
   );
-  assert.ok(calls.every((c) => c.topics.length === 2 && c.topics[0] === TRANSFER && c.topics[1] === topic(S1)), 'Transfer logs from S1');
+  const t20 = calls.filter((c) => c.topics[0] === TRANSFER);
+  assert.ok(t20.every((c) => c.topics.length === 2 && c.topics[1] === topic(S1)), 'Transfer logs from S1');
+  const t1155 = calls.filter((c) => c.topics[0] !== TRANSFER);
+  assert.equal(t1155.length, 2 * t20.length, 'TransferSingle and TransferBatch over the same ranges');
+  assert.ok(t1155.every((c) => c.topics.length === 3 && c.topics[1] === null && c.topics[2] === topic(S1)), 'ERC-1155 logs from S1 (topic 2)');
 
   indexedB = true;
   const both = await loadWithdrawalHistory(net, [S1], undefined, nonce, tokenLogs);
@@ -171,7 +178,7 @@ test('loader: token transfer in an indexed transaction but not indexed itself; o
   const A = `0x${'a1'.repeat(32)}`;
   let items: unknown[] = [];
   globalThis.fetch = (async (u: string) => {
-    if (u.includes('/transactions')) return json({ items: [{ from: { hash: S1 }, to: { hash: T }, value: '0' }], next_page_params: null });
+    if (u.includes('/transactions')) return json({ items: [{ from: { hash: S1 }, to: { hash: T }, value: '0', raw_input: transferInput(X) }], next_page_params: null });
     if (u.includes('/token-transfers')) return json({ items, next_page_params: null });
     return json({ items: [], next_page_params: null });
   }) as typeof fetch;
@@ -194,7 +201,7 @@ test('loader: a node that refuses large ranges gets smaller ones; no node, or an
       blockNumber: async () => 20_000n,
       getLogs: async (q) => {
         if (q.toBlock - q.fromBlock + 1n > 4_000n) throw new Error('block range too large');
-        ranges.push([q.fromBlock, q.toBlock]);
+        if (q.topics[0] === TRANSFER) ranges.push([q.fromBlock, q.toBlock]);
         return [];
       },
     },
