@@ -36,6 +36,7 @@ import {
   type TransferPage,
   type TxLite,
 } from './lib/data.ts';
+import { confirmPayments } from './lib/confirm.ts';
 import { decodeLogs, type PaymentLog } from './lib/decode.ts';
 import { analyze, type Funding, type Payment, type Registration, type Withdrawal } from './lib/heuristics.ts';
 import { scanLogs, type RawLog } from './lib/logs.ts';
@@ -164,9 +165,18 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
     tokenWithdrawals = tokenWithdrawals.filter((w) => keep.has(w.stealth));
     log(`Sample: ${keep.size} stealth addresses, ${paymentLogs.length} payments.`);
   }
+
+  // 3. ERC-5564: the payment and its asset are what reached the address next to its announcement, read from the
+  //    chain (confirm.ts). An announcement moves no value and anyone can make one.
+  const announced = [...new Set(paymentLogs.filter((p) => p.source === 'erc5564').map((p) => p.stealth))];
+  const arrivals = new KV<TransferPage>(join(dir, 'transfers-in-payment.json'), 200);
+  log(`Reading what reached ${announced.length} ERC-5564 stealth addresses...`);
+  await fetchAllTransfers(rpc, announced, 'to', cfg.transferCategories, cfg.erc5564StartBlock, toBlock, arrivals, o.concurrency, 'payments received');
+  const confirmed = confirmPayments(paymentLogs, (s) => arrivals.get(s)?.transfers);
+  paymentLogs = confirmed.payments;
   const stealths = [...new Set(paymentLogs.map((p) => p.stealth))];
 
-  // 3. Who sent each payment, and when.
+  // 4. Who sent each payment, and when.
   const txs = new KV<TxLite>(join(dir, 'txs.json'));
   await fetchTxs(rpc, paymentLogs.map((p) => p.txHash), txs, o.concurrency);
   const blockTimes = new KV<number>(join(dir, 'blocktimes.json'));
@@ -182,7 +192,7 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
     txHash: p.txHash,
   }));
 
-  // 4. Fresh? A real stealth address has sent nothing before its first payment. Addresses that had
+  // 5. Fresh? A real stealth address has sent nothing before its first payment. Addresses that had
   //    (test or spam announcements to used wallets) are left out and counted under quality.
   const firstBlockOf = new Map<string, number>();
   for (const p of paymentLogs) firstBlockOf.set(p.stealth, Math.min(p.blockNumber, firstBlockOf.get(p.stealth) ?? Infinity));
@@ -191,7 +201,7 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
   await fetchNoncesAt(rpc, stealths.map(nonceKey), nonceAt, o.concurrency);
   const preUsed = new Set(stealths.filter((s) => (nonceAt.get(nonceKey(s)) ?? 0) > 0));
 
-  // 5. Every stealth address's outgoing transfers. No shortcut on the current nonce: gasless
+  // 6. Every stealth address's outgoing transfers. No shortcut on the current nonce: gasless
   //    (relayed or permit) withdrawals leave it at zero.
   const codeKind = new KV<CodeKind>(join(dir, 'code.json'));
   await fetchCodeKinds(rpc, stealths, tag, codeKind, o.concurrency);
@@ -216,7 +226,7 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
     return { ...w, txFrom: tx?.from ?? '', txType: tx?.type ?? 0, priorityFee: tx?.priorityFee ?? null };
   });
 
-  // 6. H5: token-only stealth addresses that signed a transaction needed gas. Where did it come from?
+  // 7. H5: token-only stealth addresses that signed a transaction needed gas. Where did it come from?
   const assetsBy = new Map<string, Set<string>>();
   for (const p of payments) {
     const set = assetsBy.get(p.stealth) ?? new Set<string>();
@@ -233,7 +243,7 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
   const fundings: Funding[] = [];
   for (const s of needGas) for (const t of incoming.get(s)?.transfers ?? []) fundings.push({ stealth: s, txHash: t.hash, block: t.block, from: t.from });
 
-  // 7. Contracts among recipients and funders (excluded from H3 and H5).
+  // 8. Contracts among recipients and funders (excluded from H3 and H5).
   await fetchCodeKinds(rpc, [...new Set([...withdrawals.map((w) => w.to), ...fundings.map((f) => f.from)])], tag, codeKind, o.concurrency);
   const contracts = new Set<string>();
   const delegated = new Set<string>();
@@ -242,7 +252,7 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
     else if (kind === 'delegated') delegated.add(addr);
   }
 
-  // 8. Analyze and write aggregate output.
+  // 9. Analyze and write aggregate output.
   const registrations: Registration[] = decoded.registrations.map((r) => ({ registrant: r.registrant, block: r.blockNumber, registry: r.registry }));
   const results = analyze(
     { payments, withdrawals, fundings, registrations, contracts, delegated, preUsed },
@@ -255,7 +265,9 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
   }
   // Count only lookups made for this run, so a cache left by another run cannot change the result.
   const truncated =
-    stealths.filter((s) => outgoing.get(s)?.truncated).length + needGas.filter((s) => incoming.get(s)?.truncated).length;
+    announced.filter((s) => arrivals.get(s)?.truncated).length +
+    stealths.filter((s) => outgoing.get(s)?.truncated).length +
+    needGas.filter((s) => incoming.get(s)?.truncated).length;
   const umbraRegs = new Set(registrations.filter((r) => r.registry === 'umbra').map((r) => r.registrant));
   const ercRegs = new Set(registrations.filter((r) => r.registry === 'erc6538').map((r) => r.registrant));
 
@@ -288,7 +300,13 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
     },
     registrants: { umbraRegistry: umbraRegs.size, erc6538: ercRegs.size, total: new Set([...umbraRegs, ...ercRegs]).size },
     results,
-    quality: { undecodedLogs: decoded.skipped, truncatedTransferLookups: truncated, notFreshStealthAddresses: preUsed.size },
+    quality: {
+      undecodedLogs: decoded.skipped,
+      truncatedTransferLookups: truncated,
+      notFreshStealthAddresses: preUsed.size,
+      unfundedAnnouncements: confirmed.unfunded,
+      announcementAssetMismatch: confirmed.assetMismatch,
+    },
   };
   const summary: Summary = {
     generatedAt: new Date().toISOString(),

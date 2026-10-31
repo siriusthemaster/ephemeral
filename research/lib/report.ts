@@ -27,7 +27,15 @@ export interface Summary {
   };
   registrants: { umbraRegistry: number; erc6538: number; total: number };
   results: Analysis;
-  quality: { undecodedLogs: number; truncatedTransferLookups: number; notFreshStealthAddresses: number };
+  quality: {
+    undecodedLogs: number;
+    truncatedTransferLookups: number;
+    notFreshStealthAddresses: number;
+    /** ERC-5564 announcements with no value arriving next to them: not counted as payments */
+    unfundedAnnouncements: number;
+    /** ERC-5564 announcements whose metadata named another asset than the chain shows */
+    announcementAssetMismatch: number;
+  };
   /** sha256 over everything except generatedAt and rpc stats: two scans of the same range must match */
   fingerprint: string;
   rpc: { calls: number; httpRequests: number; retries: number };
@@ -91,7 +99,9 @@ export function toMarkdown(s: Summary): string {
     `| H5 gas funding (ours) | ${n(r.all.h5)} | of ${n(r.all.needingOwnGas)} that paid their own gas |`,
     '',
     `Data quality: ${n(s.quality.undecodedLogs)} undecoded logs, ${n(s.quality.truncatedTransferLookups)} truncated transfer lookups, ` +
-      `${n(s.quality.notFreshStealthAddresses)} announced addresses left out because they had sent transactions before their first payment.`,
+      `${n(s.quality.notFreshStealthAddresses)} announced addresses left out because they had sent transactions before their first payment, ` +
+      `${n(s.quality.unfundedAnnouncements)} ERC-5564 announcements left out because no value reached the address next to them, ` +
+      `${n(s.quality.announcementAssetMismatch)} whose metadata named another asset than the one that arrived.`,
     '',
     '## Notes',
     '',
