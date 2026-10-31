@@ -92,10 +92,11 @@ export const TOKEN_SELECTORS = new Set([
   '42842e0e', // safeTransferFrom(address,address,uint256)
   'b88d4fde', // safeTransferFrom(address,address,uint256,bytes)
   'f242432a', // safeTransferFrom(address,address,uint256,uint256,bytes)
+  '2eb2c2d6', // safeBatchTransferFrom(address,address,uint256[],uint256[],bytes) (ERC-1155 batch)
 ]);
 
 /** Bump when cached data formats or fetch parameters change; a mismatch clears the cache. */
-export const SCAN_VERSION = 3;
+export const SCAN_VERSION = 4;
 
 /** Pages of 1,000 transfers read per address before the lookup is marked truncated. */
 export const MAX_TRANSFER_PAGES = 10;

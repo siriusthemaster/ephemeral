@@ -43,6 +43,7 @@ const KEY = ('0x02' + '22'.repeat(32)) as Hex;
 const ZERO32 = ('0x' + '00'.repeat(32)) as Hex;
 
 const logs: FakeLog[] = [];
+const txs = new Map<string, Record<string, unknown>>();
 for (const p of fx.payments) {
   if (p.source === 'umbra') {
     const token = p.asset === 'ETH' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : p.token;
@@ -52,6 +53,12 @@ for (const p of fx.payments) {
     logs.push(mkLog(cfg.announcer, EVENTS.erc5564Announcement, { schemeId: 1n, stealthAddress: p.stealth, caller: p.sender, ephemeralPubKey: KEY, metadata }, p.block, p.tx));
   }
 }
+// ERC-5564 announcements that moved nothing (bug bounty, 24 Oct): zero-value and fake-asset claims anyone can make.
+// They must not count as payments, and the stranger's ETH claim must not hide the real token payment of S(5).
+logs.push(mkLog(cfg.announcer, EVENTS.erc5564Announcement, { schemeId: 1n, stealthAddress: fx.S(13), caller: fx.SCAMMER, ephemeralPubKey: KEY, metadata: meta('eeeeeeee', null) }, 5_587_000, fx.h(313)));
+logs.push(mkLog(cfg.announcer, EVENTS.erc5564Announcement, { schemeId: 1n, stealthAddress: fx.S(5), caller: fx.SCAMMER, ephemeralPubKey: KEY, metadata: meta('eeeeeeee', null) }, 5_515_000, fx.h(305)));
+txs.set(fx.h(313), { hash: fx.h(313), from: fx.SCAMMER, type: '0x2', maxPriorityFeePerGas: '0x1' });
+txs.set(fx.h(305), { hash: fx.h(305), from: fx.SCAMMER, type: '0x2', maxPriorityFeePerGas: '0x1' });
 for (const w of fx.withdrawals.filter((w) => w.kind === 'umbra-token')) {
   logs.push(mkLog(cfg.umbra, EVENTS.umbraTokenWithdrawal, { receiver: w.stealth, acceptor: w.to, amount: 1n, token: w.token }, w.block, w.tx));
 }
@@ -63,7 +70,6 @@ for (const r of fx.registrations) {
   }
 }
 
-const txs = new Map<string, Record<string, unknown>>();
 for (const p of fx.payments) txs.set(p.tx, { hash: p.tx, from: p.sender, type: '0x2', maxPriorityFeePerGas: '0x3b9aca00' });
 for (const w of fx.withdrawals) {
   txs.set(w.tx, { hash: w.tx, from: w.txFrom, type: hex(w.type), ...(w.fee && w.type >= 2 ? { maxPriorityFeePerGas: hex(BigInt(w.fee)) } : { gasPrice: '0x1' }) });
@@ -77,6 +83,12 @@ for (const w of fx.withdrawals.filter((w) => w.kind !== 'umbra-token')) {
   outgoing.set(w.stealth, list);
 }
 const incoming = new Map<string, Transfer[]>();
+// What reached each ERC-5564 address: the value moved in the payment transaction itself.
+for (const p of fx.payments.filter((p) => p.source === 'erc5564')) {
+  const list = incoming.get(p.stealth) ?? [];
+  list.push({ hash: p.tx, blockNum: hex(p.block), from: p.sender, to: p.stealth, category: p.asset === 'ETH' ? 'external' : 'erc20', rawContract: { address: p.token } });
+  incoming.set(p.stealth, list);
+}
 for (const f of fx.fundings) {
   const list = incoming.get(f.stealth) ?? [];
   list.push({ hash: f.tx, blockNum: hex(f.block), from: f.from, to: f.stealth, category: 'external', rawContract: { address: null } });
@@ -126,7 +138,10 @@ function handle(method: string, params: any[]): { result?: unknown; error?: { co
       return { result: params[0] === fx.UMBRA ? '0x6080604052' : '0x' };
     case 'alchemy_getAssetTransfers': {
       const q = params[0];
-      const all = q.fromAddress ? (outgoing.get(q.fromAddress) ?? []) : (incoming.get(q.toAddress) ?? []);
+      const cats = new Set(q.category as string[]);
+      const all = (q.fromAddress ? (outgoing.get(q.fromAddress) ?? []) : (incoming.get(q.toAddress) ?? [])).filter(
+        (t) => cats.has(t.category) && BigInt(t.blockNum) >= BigInt(q.fromBlock) && BigInt(t.blockNum) <= BigInt(q.toBlock),
+      );
       const page = q.pageKey ? Number(q.pageKey) : 0;
       const pageKey = page + 1 < all.length ? String(page + 1) : undefined;
       return { result: { transfers: all.slice(page, page + 1), ...(pageKey ? { pageKey } : {}) } };
@@ -180,7 +195,13 @@ test('full scan reproduces the fixture numbers', async () => {
     { total: 12, umbra: 6, erc5564: 6, eth: 7, token: 5, unknown: 0 },
   );
   assert.deepEqual(s.registrants, { umbraRegistry: 1, erc6538: 1, total: 2 });
-  assert.deepEqual(s.quality, { undecodedLogs: 0, truncatedTransferLookups: 0, notFreshStealthAddresses: 1 });
+  assert.deepEqual(s.quality, {
+    undecodedLogs: 0,
+    truncatedTransferLookups: 0,
+    notFreshStealthAddresses: 1,
+    unfundedAnnouncements: 2, // S(13) and the stranger's ETH claim on S(5)
+    announcementAssetMismatch: 0,
+  });
   assert.ok(rangeErrors > 0, 'range limit was exercised');
   assert.ok(s.rpc.retries > 0, '429 was retried');
 
