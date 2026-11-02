@@ -1,4 +1,4 @@
-// The withdrawal checks behind H1–H5 and the timing advice. Pure: easy to test.
+// The withdrawal checks behind H1 to H5 and the timing advice. Pure: easy to test.
 // The payers and the asset are read from the chain (funding.ts), never from announcement metadata alone.
 import { isAddress, type Hex } from 'viem';
 
@@ -24,7 +24,7 @@ export type GuardInput = {
   ownStealthAddresses: Hex[]; // every stealth address of ours we know about
   usedDestinations: Hex[]; // destinations that other payments of yours were withdrawn to (rebuilt from chain history, plus this session)
   historyComplete: boolean; // true only once past withdrawals fully loaded; false while loading or unreadable. Missing = incomplete
-  receivedAt?: number; // ms
+  receivedAt?: number; // ms: the time of the block the funds arrived in (funding.ts arrivalBlock), not the announcement's
   isToken: boolean;
   /**
    * True when what the stealth address received could not be fully read from the chain (announcement metadata is often
@@ -33,6 +33,18 @@ export type GuardInput = {
    */
   assetUnknown?: boolean;
   hasGas: boolean;
+  /**
+   * For a token payment, or one whose asset is unknown: who sent the ETH on the stealth address that pays the gas, read
+   * from the chain (funding.ts gasSenders: every ETH sender and the sender of its transaction, except ETH that came in
+   * the same transaction as the token). Holding ETH is not enough (bug bounty, 31 Oct): when it came from the key
+   * wallet, another of your stealth addresses or a destination your payments went to, H5 blocks; from the payer of
+   * another payment of yours it warns. Missing or null = not read, and H5 warns.
+   */
+  gasFrom?: Hex[] | null;
+  /** Every payer of your other payments (their funding payers). Gas from one of them ties the two payments. */
+  otherPayers?: Hex[];
+  /** For a token withdrawal: the token contract. Sending the token to its own contract is blocked like a burn. */
+  tokenAddress?: Hex;
   now: number;
 };
 
@@ -40,18 +52,28 @@ const same = (a?: string, b?: string) => !!a && !!b && a.toLowerCase() === b.toL
 // An input counts as known only when it is an address (any letter case). Missing, empty or malformed = unknown.
 const known = (a: unknown): a is Hex => typeof a === 'string' && isAddress(a, { strict: false });
 
-// Destinations nothing ever comes back from. Lowercase keys; a Map, so no key hits Object.prototype.
+// Destinations nothing ever comes back from. Lowercase keys; a Map, so no key hits Object.prototype. Also the
+// precompiles 0x…01 to 0x…11 (ecrecover to the BLS12-381 ones): no code, no owner, nothing sent there returns.
 const UNSPENDABLE = new Map([
   ['0x0000000000000000000000000000000000000000', 'the zero address'],
   ['0x000000000000000000000000000000000000dead', 'the 0x…dEaD burn address'],
   ['0x55649e01b5df198d18d95b5cc5051630cfd45564', 'the ERC-5564 Announcer contract'],
   ['0x6538e6bf4b0ebd30a8ea093027ac2422ce5d6538', 'the ERC-6538 Registry contract'],
+  ...Array.from({ length: 0x11 }, (_, i): [string, string] => {
+    const n = (i + 1).toString(16).padStart(2, '0');
+    return [`0x${'0'.repeat(38)}${n}`, `the precompile 0x…${n}`];
+  }),
 ]);
+/** True for a destination nothing ever comes back from (the list above), in any letter case. */
+export const isUnspendable = (a: unknown) => typeof a === 'string' && UNSPENDABLE.has(a.trim().toLowerCase());
 
 export function withdrawChecks(g: GuardInput): Check[] {
   const out: Check[] = [];
   const unspendable = typeof g.destination === 'string' ? UNSPENDABLE.get(g.destination.toLowerCase()) : undefined;
   if (unspendable) return [{ id: 'burn', level: 'block', text: `That is ${unspendable}. Funds sent there are lost for good.` }];
+  // a token sent to its own contract is stuck there for good
+  if (g.isToken && same(g.destination, g.tokenAddress))
+    return [{ id: 'burn', level: 'block', text: 'That is the token contract itself. Tokens sent there are lost for good.' }];
   if (!isAddress(g.destination)) return [{ id: 'addr', level: 'block', text: 'Enter a valid Ethereum address.' }];
   if (same(g.destination, g.stealthAddress)) out.push({ id: 'self', level: 'block', text: 'That is the payment address itself.' });
 
@@ -96,7 +118,21 @@ export function withdrawChecks(g: GuardInput): Check[] {
   // H4 fee fingerprint
   out.push({ id: 'H4', level: 'ok', text: 'H4: fee set to the network standard, never custom.' });
 
-  // H5 gas funding. A payment whose asset could not be read counts as a possible token payment.
+  // H5 gas funding. A payment whose asset could not be read counts as a possible token payment. Holding ETH is not enough
+  // for a token payment (31 Oct): where that ETH came from is checked against every wallet linked to you.
+  const tokenLike = g.isToken || g.assetUnknown === true;
+  const gasFrom = Array.isArray(g.gasFrom) ? g.gasFrom.filter((x): x is Hex => typeof x === 'string') : null;
+  const has = (list: string[], a: string) => list.some((x) => same(x, a));
+  const mine: [string | undefined, string][] = [
+    [g.walletAddress, 'your key wallet'],
+    ...g.ownStealthAddresses.filter((a) => !same(a, g.stealthAddress)).map((a): [string, string] => [a, 'another of your payment addresses']),
+    ...g.usedDestinations.map((a): [string, string] => [a, 'an address your payments were withdrawn to']),
+  ];
+  const linkedBy = gasFrom ? mine.find(([a]) => !!a && has(gasFrom, a))?.[1] : undefined;
+  // the payer of another payment of yours: ties the two payments, unless it also paid this one (then it already does)
+  const sharedPayer = gasFrom
+    ? (Array.isArray(g.otherPayers) ? g.otherPayers : []).some((p) => typeof p === 'string' && has(gasFrom, p) && !payers.some((q) => same(q, p)))
+    : false;
   if (g.isToken && !g.hasGas)
     out.push({
       id: 'H5',
@@ -108,6 +144,24 @@ export function withdrawChecks(g: GuardInput): Check[] {
       id: 'H5',
       level: 'block',
       text: 'H5: what this payment holds could not be read from the chain, so it may be a token with no ETH for gas. Do not fund it from a wallet linked to you.',
+    });
+  else if (tokenLike && linkedBy)
+    out.push({
+      id: 'H5',
+      level: 'block',
+      text: `H5: the ETH for gas on this payment came from a linked wallet (${linkedBy}). Withdrawing it would tie the payment to that wallet.`,
+    });
+  else if (tokenLike && sharedPayer)
+    out.push({
+      id: 'H5',
+      level: 'warn',
+      text: 'H5: the ETH for gas on this payment came from a linked wallet (the payer of another payment of yours), so withdrawing it may tie the two payments together.',
+    });
+  else if (g.isToken && !gasFrom)
+    out.push({
+      id: 'H5',
+      level: 'warn',
+      text: 'H5: where the ETH for gas on this payment came from could not be read from the chain, so it cannot be confirmed that it did not come from a linked wallet.',
     });
   else if (g.assetUnknown === true)
     out.push({

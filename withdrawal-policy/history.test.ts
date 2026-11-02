@@ -42,14 +42,16 @@ test('loader: ETH sends with value and token transfers, across pages; a zero-val
           items: [{ from: { hash: S1 }, to: { hash: T }, value: '0', raw_input: transferInput(X) }],
           next_page_params: { block_number: 5, index: 1, items_count: 50 },
         });
-      return json({ items: [{ from: { hash: S1 }, to: { hash: X }, value: '1000' }, { from: { hash: S1 }, to: null, value: '5' }], next_page_params: null });
+      // a plain ETH send has empty calldata; the value-bearing contract creation that stood here moved to
+      // h3-value-calls.test.ts, where it makes the history incomplete (27 Oct)
+      return json({ items: [{ from: { hash: S1 }, to: { hash: X }, value: '1000', raw_input: '0x' }], next_page_params: null });
     }
     if (url.pathname.endsWith(`/addresses/${S1}/token-transfers`))
       return json({ items: [{ from: { hash: S1 }, to: { hash: X } }], next_page_params: null });
     return json({ message: 'Not found' }, 404);
   }) as typeof fetch;
-  // the on-chain nonces of both addresses: S1 signed the 3 transactions the explorer lists, S2 none
-  const r = await loadWithdrawalHistory(net, [S1, S2], undefined, { [S1]: 3, [S2]: 0 }, noTokenLogs);
+  // the on-chain nonces of both addresses: S1 signed the 2 transactions the explorer lists, S2 none
+  const r = await loadWithdrawalHistory(net, [S1, S2], undefined, { [S1]: 2, [S2]: 0 }, noTokenLogs);
   assert.equal(r.ok, true);
   assert.deepEqual(r.history, [
     { from: S1, to: X },
@@ -65,7 +67,7 @@ test('loader: ETH sends with value and token transfers, across pages; a zero-val
 test('loader: a failing address makes ok false but keeps what loaded', async () => {
   globalThis.fetch = (async (u: string) => {
     if (u.includes(S2)) return json({ message: 'bad' }, 400);
-    if (u.includes('/transactions')) return json({ items: [{ from: { hash: S1 }, to: { hash: X }, value: '1' }], next_page_params: null });
+    if (u.includes('/transactions')) return json({ items: [{ from: { hash: S1 }, to: { hash: X }, value: '1', raw_input: '0x' }], next_page_params: null });
     return json({ items: [], next_page_params: null });
   }) as typeof fetch;
   const r = await loadWithdrawalHistory(net, [S1, S2], undefined, { [S1]: 1, [S2]: 0 }, noTokenLogs);

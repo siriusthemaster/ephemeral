@@ -67,25 +67,30 @@ export type EthIn = {
   direct: boolean; // a plain transaction to the address, the kind /receipt/ can check
 };
 
-/** A Transfer log to the address: ERC-20 (three topics) or ERC-721 (four topics). */
+/**
+ * A token log to the address: ERC-20 Transfer (three topics), ERC-721 Transfer (four topics), or an ERC-1155
+ * TransferSingle or TransferBatch (operator, from and to in topics 1 to 3; bug bounty, 31 Oct).
+ */
 export type TokenIn = {
   token: Hex; // the contract that emitted the log
-  from: Hex; // topic 1
+  from: Hex; // topic 1 of a Transfer, topic 2 (from) of an ERC-1155 log
+  operator?: Hex; // ERC-1155 only: topic 1, the address that moved it (the owner or an approved operator)
   txFrom: Hex | null; // sender of the transaction that carried it (null = not read)
   tx: Hex;
   logIndex: number | null;
   blockNumber: bigint | null;
   value: bigint | null; // the amount of a standard ERC-20 log, else null
-  kind: 'erc20' | 'erc721';
+  kind: 'erc20' | 'erc721' | 'erc1155';
   standard: boolean; // ERC-20 shape: three topics and the amount as one data word
 };
 
 export type HeldToken = { token: Hex; balance: bigint | null; fromLog: boolean };
 
 /** Why the payers of an address are not fully known. */
-export type FundingGap = 'unread' | 'sender' | 'eth' | 'spent' | 'token' | 'nothing';
+export type FundingGap = 'unread' | 'logs' | 'sender' | 'eth' | 'spent' | 'token' | 'nothing';
 export const FUNDING_GAP: Record<FundingGap, string> = {
   unread: 'the chain could not be read',
+  logs: 'your RPC endpoint did not answer the token log query this check needs (eth_getLogs without an address, also asked one address at a time). Set an RPC in Settings that answers it',
   sender: 'the sender of a transaction that paid it could not be read',
   eth: 'part of the ETH on it came from a transaction this app could not find',
   spent: 'it has already sent a transaction, and what reached it can then only be confirmed with Blockscout on',
@@ -102,8 +107,9 @@ export type Funding = {
   nonce: number | null; // transactions the address signed, null = not read
   /**
    * Every address read from the chain that sent value to this address (the sender of each ETH transfer and of each
-   * Transfer log, and the sender of the transaction that carried it), plus the caller and the sender of every
-   * announcement for it. Lowercase, unique. H2 compares the destination against all of them.
+   * Transfer log, the operator and the sender of each ERC-1155 log, and the sender of the transaction that carried
+   * it), plus the caller and the sender of every announcement for it. Lowercase, unique. H2 compares the destination
+   * against all of them.
    */
   payers: Hex[];
   /** True only when every source of what the address received was found and its sender read (fail closed). */
@@ -152,6 +158,9 @@ export type FundingQuery = {
 
 /** Blocks before the first announcement that are read too: a payer can fund the address first and announce later. */
 export const FUNDING_WINDOW = 7_200n;
+/** ERC-1155 TransferSingle(operator, from, to, id, value) and TransferBatch(operator, from, to, ids, values). */
+export const TRANSFER_SINGLE_TOPIC = '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62' as Hex;
+export const TRANSFER_BATCH_TOPIC = '0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb' as Hex;
 const CHUNK = 10_000n;
 const MIN_CHUNK = 500n;
 const PER_QUERY = 50; // addresses per eth_getLogs topic list
@@ -211,27 +220,41 @@ export async function readFunding(
   if (!qs.length) return out;
   const head = await reader.head().catch(() => null);
 
-  // one pass for every address: Transfer logs whose `to` (topic 2) is one of them
+  // one pass for every address: Transfer logs whose `to` (topic 2) is one of them, and ERC-1155 TransferSingle and
+  // TransferBatch logs whose `to` (topic 3) is one of them (31 Oct). A refused list is asked again one address at a
+  // time (some public endpoints refuse lists of addresses); what still fails is unread for that address only.
   const logsBy = new Map<string, FundLog[]>();
-  let logsOk = head !== null;
+  const logsUnread = new Set<string>();
   if (head !== null) {
     let first = head;
     for (const q of qs) for (const a of q.announcements) if (typeof a.blockNumber === 'bigint' && a.blockNumber < first) first = a.blockNumber;
     let from = first > FUNDING_WINDOW ? first - FUNDING_WINDOW : 0n;
     if (from < opts.startBlock) from = opts.startBlock;
-    for (let i = 0; i < qs.length; i += PER_QUERY) {
-      const group = qs.slice(i, i + PER_QUERY).map((q) => pad(q.address));
-      try {
-        for (const l of await logsInRange(reader, [TRANSFER_TOPIC, null, group], from, head, opts.signal)) {
-          const t2 = l.topics?.[2];
-          if (typeof t2 !== 'string') continue;
-          const k = topicAddr(t2);
-          logsBy.set(k, [...(logsBy.get(k) ?? []), l]);
+    const kinds: { topics: (to: Hex | Hex[]) => (Hex | Hex[] | null)[]; toAt: number }[] = [
+      { topics: (to) => [TRANSFER_TOPIC as Hex, null, to], toAt: 2 },
+      { topics: (to) => [[TRANSFER_SINGLE_TOPIC, TRANSFER_BATCH_TOPIC], null, null, to], toAt: 3 },
+    ];
+    const keep = (l: FundLog, toAt: number) => {
+      const t = l.topics?.[toAt];
+      if (typeof t !== 'string') return;
+      const k = topicAddr(t);
+      logsBy.set(k, [...(logsBy.get(k) ?? []), l]);
+    };
+    for (const kind of kinds)
+      for (let i = 0; i < qs.length; i += PER_QUERY) {
+        const group = qs.slice(i, i + PER_QUERY).map((q) => pad(q.address));
+        try {
+          for (const l of await logsInRange(reader, kind.topics(group.length === 1 && group[0] ? group[0] : group), from, head, opts.signal)) keep(l, kind.toAt);
+        } catch {
+          for (const one of group) {
+            try {
+              for (const l of await logsInRange(reader, kind.topics(one), from, head, opts.signal)) keep(l, kind.toAt);
+            } catch {
+              logsUnread.add(topicAddr(one));
+            }
+          }
         }
-      } catch {
-        logsOk = false;
       }
-    }
   }
 
   const txCache = new Map<string, Promise<FundingTx | null>>();
@@ -264,16 +287,40 @@ export async function readFunding(
       same.blockNumber ??= e.blockNumber;
     };
 
-    // 1. Transfer logs to the address: EIP-7708 ETH (emitted by SYSTEM_ADDRESS only), ERC-20 and ERC-721
+    // 1. Transfer logs to the address: EIP-7708 ETH (emitted by SYSTEM_ADDRESS only), ERC-20 and ERC-721; and
+    //    ERC-1155 TransferSingle and TransferBatch (operator, from, to), whose operator and sender are payers too
+    const seenLog = new Set<string>();
     for (const l of logsBy.get(a) ?? []) {
       const tx = l.transactionHash;
       if (l.removed === true || !isHash(tx)) continue;
+      // one log returned by two queries (a list and then a single address) counts once
+      const lk = `${tx.toLowerCase()}:${String(l.logIndex ?? '')}:${(l.topics ?? []).join(',').toLowerCase()}`;
+      if (seenLog.has(lk)) continue;
+      seenLog.add(lk);
       const e = parseEthTransfer(l);
       if (e) {
         if (e.to === a && e.value > 0n) addEth({ tx, from: e.from, txFrom: null, value: e.value, blockNumber: e.blockNumber, direct: false });
         continue;
       }
       const t = (l.topics ?? []).map((x) => (typeof x === 'string' ? x.toLowerCase() : ''));
+      if ((t[0] === TRANSFER_SINGLE_TOPIC || t[0] === TRANSFER_BATCH_TOPIC) && isAddr(l.address) && l.address.toLowerCase() !== SYSTEM_ADDRESS) {
+        if (t.length !== 4 || !ADDRESS_TOPIC.test(t[1] ?? '') || !ADDRESS_TOPIC.test(t[2] ?? '') || !ADDRESS_TOPIC.test(t[3] ?? '')) continue;
+        if (topicAddr(t[3] ?? '') !== a) continue;
+        const li = big(l.logIndex);
+        tokens.push({
+          token: low(l.address),
+          from: topicAddr(t[2] ?? ''),
+          operator: topicAddr(t[1] ?? ''),
+          txFrom: null,
+          tx,
+          logIndex: li === null ? null : Number(li),
+          blockNumber: big(l.blockNumber),
+          value: null,
+          kind: 'erc1155',
+          standard: false,
+        });
+        continue;
+      }
       if (t[0] !== TRANSFER_TOPIC || !isAddr(l.address) || l.address.toLowerCase() === SYSTEM_ADDRESS) continue;
       if (!ADDRESS_TOPIC.test(t[1] ?? '') || !ADDRESS_TOPIC.test(t[2] ?? '') || topicAddr(t[2] ?? '') !== a) continue;
       const kind = t.length === 4 ? 'erc721' : t.length === 3 ? 'erc20' : null;
@@ -372,12 +419,12 @@ export async function readFunding(
     );
 
     const payers: Hex[] = [];
-    for (const p of [...announcedBy, ...eth.flatMap((e) => [e.from, e.txFrom]), ...tokens.flatMap((t) => [t.from, t.txFrom])])
+    for (const p of [...announcedBy, ...eth.flatMap((e) => [e.from, e.txFrom]), ...tokens.flatMap((t) => [t.from, t.operator, t.txFrom])])
       if (isAddr(p) && !payers.includes(low(p))) payers.push(low(p));
 
     const arrived =
       eth.length > 0 ||
-      tokens.some((t) => t.kind === 'erc721' || !t.standard || (t.value ?? 0n) > 0n) ||
+      tokens.some((t) => t.kind !== 'erc20' || !t.standard || (t.value ?? 0n) > 0n) ||
       held.some((h) => (h.balance ?? 0n) > 0n);
     // a held token nobody can be seen sending: who paid it is unknown. A token found through its own log has a sender.
     const tokenGap = held.some((h) => !h.fromLog && (h.balance ?? 0n) > 0n);
@@ -385,8 +432,10 @@ export async function readFunding(
       balance !== null &&
       nonce !== null &&
       (nonce === 0 ? sum() === balance : explorerOk && eth.length > 0 && sum() >= balance);
+    const logsOk = head !== null && !logsUnread.has(a);
     let gap: FundingGap | null = null;
-    if (head === null || !logsOk || balance === null || nonce === null) gap = 'unread';
+    if (head === null || balance === null || nonce === null) gap = 'unread';
+    else if (!logsOk) gap = 'logs';
     else if (senderGap) gap = 'sender';
     else if (!ethOk) gap = nonce > 0 && !explorerOk ? 'spent' : 'eth';
     else if (tokenGap) gap = 'token';
@@ -461,7 +510,7 @@ export const ASSET_UNKNOWN: Record<AssetUnknown, string> = {
     'What arrived at this address could not be read from the chain. It may hold a token: never top it up with ETH from a wallet linked to you (H5).',
   unseen:
     'Nothing this app can read has arrived at this address. It may hold a token this app does not see: never top it up with ETH from a wallet linked to you (H5).',
-  nft: 'This address received a token this app cannot withdraw (ERC-721). Never top it up with ETH from a wallet linked to you (H5).',
+  nft: 'This address received a token this app cannot withdraw (ERC-721 or ERC-1155). Never top it up with ETH from a wallet linked to you (H5).',
 };
 
 export type PaymentView = {
@@ -488,14 +537,14 @@ export function paymentView(hits: Hit[], f: Funding | undefined): PaymentView {
   const arrived =
     !!f &&
     (f.eth.length > 0 ||
-      f.tokens.some((t) => t.kind === 'erc721' || !t.standard || (t.value ?? 0n) > 0n) ||
+      f.tokens.some((t) => t.kind !== 'erc20' || !t.standard || (t.value ?? 0n) > 0n) ||
       f.held.some((h) => (h.balance ?? 0n) > 0n) ||
       (f.balance ?? 0n) > 0n);
   const unpaid = !!f && f.assetsRead && !arrived && f.nonce === 0 && f.balance === 0n && !!ethClaim;
   let assetUnknown: AssetUnknown | null = null;
   if (!f || !f.assetsRead) assetUnknown = 'unread';
   else if (!arrived && !unpaid) assetUnknown = 'unseen';
-  else if (f.tokens.some((t) => t.kind === 'erc721')) assetUnknown = 'nft';
+  else if (f.tokens.some((t) => t.kind === 'erc721' || t.kind === 'erc1155')) assetUnknown = 'nft';
   let firstBlock: bigint | null = null;
   for (const b of [...hits.map((h) => h.blockNumber), ...(f?.eth ?? []).map((e) => e.blockNumber), ...(f?.tokens ?? []).map((t) => t.blockNumber)])
     if (typeof b === 'bigint' && (firstBlock === null || b < firstBlock)) firstBlock = b;
@@ -510,6 +559,36 @@ export function paymentView(hits: Hit[], f: Funding | undefined): PaymentView {
     assetUnknown,
     firstBlock: firstBlock ?? 0n,
   };
+}
+
+/**
+ * The block the funds arrived in (bug bounty, 31 Oct): the latest block of an ETH transfer or a token log to the
+ * address, read from the chain. Pass the time of this block as `receivedAt` to withdrawChecks, not the time of the
+ * announcement: a payer can announce long before or after paying. null = no arrival with a known block.
+ */
+export function arrivalBlock(f: Funding | undefined): bigint | null {
+  let b: bigint | null = null;
+  for (const x of [...(f?.eth ?? []).filter((e) => e.value > 0n).map((e) => e.blockNumber), ...(f?.tokens ?? []).map((t) => t.blockNumber)])
+    if (typeof x === 'bigint' && (b === null || x > b)) b = x;
+  return b;
+}
+
+/**
+ * Who sent the ETH that pays the gas of a token withdrawal (bug bounty, 31 Oct): the sender of every ETH transfer to
+ * the address, and of the transaction that carried it, except ETH that came in the same transaction as a token payment
+ * to it (a gas tip that came with the tokens is part of that payment: its sender is already a payer). Lowercase,
+ * unique. null = not known: not every source and sender was read (payersKnown false). Pass it to withdrawChecks as
+ * `gasFrom`; H5 compares it against every wallet linked to the user.
+ */
+export function gasSenders(f: Funding | undefined): Hex[] | null {
+  if (!f || f.payersKnown !== true) return null;
+  const tokenTxs = new Set(f.tokens.map((t) => t.tx.toLowerCase()));
+  const out: Hex[] = [];
+  for (const e of f.eth) {
+    if (tokenTxs.has(e.tx.toLowerCase())) continue;
+    for (const p of [e.from, e.txFrom]) if (isAddr(p) && !out.includes(low(p))) out.push(low(p));
+  }
+  return out;
 }
 
 /**
