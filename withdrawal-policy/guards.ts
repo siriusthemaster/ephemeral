@@ -66,13 +66,14 @@ export function withdrawChecks(g: GuardInput): Check[] {
     out.push({ id: 'H1', level: 'block', text: 'H1: cannot check, key wallet unknown. Withdraw stays locked until the key wallet is known.' });
   else out.push({ id: 'H1', level: 'ok', text: 'H1: not your key wallet.' });
 
-  // H2 round trip. Fail closed: while the payer is unknown, nothing can be ruled out. A known payer warns, as before.
-  // Every payer read from the chain counts, not only the one passed as `payer`.
+  // H2 round trip. Every known payer blocks, like H1: the payer is never a destination (bug bounty, 26 Oct; before, a
+  // known payer only warned). Every payer read from the chain counts, not only the one passed as `payer`. Fail closed:
+  // while the payer is unknown, nothing can be ruled out, so every destination is blocked.
   const payers = [g.payer, ...(Array.isArray(g.payers) ? g.payers : [])];
-  if (!known(g.payer))
+  if (payers.some((p) => known(p) && same(g.destination, p)))
+    out.push({ id: 'H2', level: 'block', text: 'H2: this address sent you the payment. Sending it back links both ends.' });
+  else if (!known(g.payer))
     out.push({ id: 'H2', level: 'block', text: 'H2: cannot check, payer unknown. Withdraw stays locked until the payer is known.' });
-  else if (payers.some((p) => same(g.destination, p)))
-    out.push({ id: 'H2', level: 'warn', text: 'H2: this address sent you the payment. Sending it back links both ends.' });
   else out.push({ id: 'H2', level: 'ok', text: 'H2: not the payer.' });
 
   // H3 collector

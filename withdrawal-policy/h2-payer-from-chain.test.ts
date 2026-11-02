@@ -122,7 +122,7 @@ test('relayed announcement: the address that sent the ETH is a payer, the announ
   assert.equal(f.payersKnown, true);
   // before: only the announcement was read, so the real payer passed
   assert.equal(h2(guardFor(f, { destination: PAYER, payer: RELAYER, payers: [] })).text, 'H2: not the payer.');
-  for (const d of [PAYER, RELAYER]) assert.equal(h2(guardFor(f, { destination: d })).level, 'warn', d);
+  for (const d of [PAYER, RELAYER]) assert.equal(h2(guardFor(f, { destination: d })).level, 'block', d); // every payer blocks (26 Oct)
   assert.equal(h2(guardFor(f)).level, 'ok');
 });
 
@@ -139,7 +139,7 @@ test('token payment: the Transfer log sender and its transaction sender are paye
     [{ txHash: h(1), caller: RELAYER, blockNumber: 200n }],
   );
   assert.equal(f.payersKnown, true, String(f.gap));
-  for (const p of [POOL, BUYER, ROUTER, RELAYER]) assert.equal(h2(guardFor(f, { destination: p, isToken: true })).level, 'warn', p);
+  for (const p of [POOL, BUYER, ROUTER, RELAYER]) assert.equal(h2(guardFor(f, { destination: p, isToken: true })).level, 'block', p);
 });
 
 test('fail closed: while any funding sender cannot be read, the wallet passes no payer and H2 blocks', async () => {
@@ -198,7 +198,7 @@ test('a later announcement claiming 5 ETH on a 0.5 ETH payment decides nothing',
   assert.equal(v.receiptTx, h(9));
   assert.equal(v.multi, true);
   assert.match(MULTI_ANNOUNCEMENT, /more than one announcement points to this address/i);
-  assert.equal(h2(guardFor(f, { destination: PAYER })).level, 'warn');
+  assert.equal(h2(guardFor(f, { destination: PAYER })).level, 'block'); // every payer blocks (26 Oct)
 });
 
 test('Blockscout incoming: plain and internal transfers to the address, filter=to', async () => {

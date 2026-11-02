@@ -20,10 +20,11 @@ test('H1 blocks the key wallet', () => {
   const c = withdrawChecks({ ...base, destination: base.walletAddress, ownStealthAddresses: [...base.ownStealthAddresses], usedDestinations: [...base.usedDestinations] });
   assert.equal(blocking(c), true);
 });
-test('H2 warns on the payer', () => {
+test('H2 blocks the payer (since 26 Oct report: the payer is never a destination)', () => {
   const c = withdrawChecks({ ...base, destination: base.payer, ownStealthAddresses: [...base.ownStealthAddresses], usedDestinations: [...base.usedDestinations] });
-  assert.equal(blocking(c), false);
-  assert.equal(warnings(c)[0].id, 'H2');
+  assert.equal(blocking(c), true);
+  assert.equal(c.find((x) => x.id === 'H2')!.level, 'block');
+  assert.ok(!warnings(c).some((x) => x.id === 'H2'));
 });
 test('H3 warns on another stealth address and on a reused destination', () => {
   for (const d of ['0x4444444444444444444444444444444444444444', '0x5555555555555555555555555555555555555555']) {
@@ -193,9 +194,9 @@ test('control: with the key wallet and the payer known, H1 and H2 behave as befo
   assert.deepEqual(c.map((x) => `${x.id}:${x.level}`), ['H1:ok', 'H2:ok', 'H3:ok', 'H4:ok', 'H5:ok']);
   // any letter case of a known input counts as known
   assert.equal(blocking(withdrawChecks({ ...clean, walletAddress: getAddress(base.walletAddress), payer: base.payer.toUpperCase().replace('0X', '0x') as Hex })), false);
-  // the payer itself still only warns (H2 level unchanged), the key wallet still blocks
+  // the payer itself blocks like the key wallet (26 Oct report: the payer is never a destination)
   const back = withdrawChecks({ ...clean, destination: base.payer });
-  assert.equal(back.find((x) => x.id === 'H2')!.level, 'warn');
-  assert.equal(blocking(back), false);
+  assert.equal(back.find((x) => x.id === 'H2')!.level, 'block');
+  assert.equal(blocking(back), true);
   assert.equal(withdrawChecks({ ...clean, destination: base.walletAddress }).find((x) => x.id === 'H1')!.level, 'block');
 });
