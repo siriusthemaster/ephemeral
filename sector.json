@@ -1,0 +1,267 @@
+{
+ "schema": 1,
+ "asOf": "2026-11-02T00:00:00Z",
+ "window30d": {
+  "from": "2026-10-03T00:00:00Z",
+  "to": "2026-11-02T00:00:00Z"
+ },
+ "label": "Stealth payments, whole sector: Umbra and ERC-5564 apps on Ethereum and five other chains. Not ephemeral numbers.",
+ "units": "Counts of onchain events (logs), not people. Payments = Umbra Announcement + ERC-5564 Announcement. Registrations = Umbra StealthKeyChanged + ERC-6538 StealthMetaAddressSet.",
+ "blocks": {
+  "ethereum": {
+   "asOf": 26323364,
+   "from30d": 26108081
+  },
+  "arbitrum": {
+   "asOf": 520415228,
+   "from30d": 511139923
+  },
+  "optimism": {
+   "asOf": 158989411,
+   "from30d": 157693411
+  },
+  "polygon": {
+   "asOf": 96581429,
+   "from30d": 94853640
+  },
+  "base": {
+   "asOf": 53394126,
+   "from30d": 52098126
+  },
+  "gnosis": {
+   "asOf": 49062480,
+   "from30d": 48558286
+  }
+ },
+ "chains": {
+  "ethereum": {
+   "name": "Ethereum",
+   "chainId": 1,
+   "explorer": "https://etherscan.io",
+   "payments": 25757,
+   "payments30d": 108,
+   "registrations": 12151,
+   "registrations30d": 23,
+   "umbra": 25497,
+   "umbra_30d": 84,
+   "erc5564": 260,
+   "erc5564_30d": 24,
+   "umbraKeys": 12138,
+   "umbraKeys_30d": 22,
+   "erc6538": 13,
+   "erc6538_30d": 1
+  },
+  "arbitrum": {
+   "name": "Arbitrum",
+   "chainId": 42161,
+   "explorer": "https://arbiscan.io",
+   "payments": 100208,
+   "payments30d": 8,
+   "registrations": 25651,
+   "registrations30d": 10,
+   "umbra": 100191,
+   "umbra_30d": 8,
+   "erc5564": 17,
+   "erc5564_30d": 0,
+   "umbraKeys": 25634,
+   "umbraKeys_30d": 4,
+   "erc6538": 17,
+   "erc6538_30d": 6
+  },
+  "optimism": {
+   "name": "Optimism",
+   "chainId": 10,
+   "explorer": "https://optimistic.etherscan.io",
+   "payments": 72278,
+   "payments30d": 0,
+   "registrations": 14530,
+   "registrations30d": 2,
+   "umbra": 72276,
+   "umbra_30d": 0,
+   "erc5564": 2,
+   "erc5564_30d": 0,
+   "umbraKeys": 14530,
+   "umbraKeys_30d": 2,
+   "erc6538": 0,
+   "erc6538_30d": 0
+  },
+  "polygon": {
+   "name": "Polygon",
+   "chainId": 137,
+   "explorer": "https://polygonscan.com",
+   "payments": 102559,
+   "payments30d": 4,
+   "registrations": 29326,
+   "registrations30d": 2,
+   "umbra": 102550,
+   "umbra_30d": 1,
+   "erc5564": 9,
+   "erc5564_30d": 3,
+   "umbraKeys": 29317,
+   "umbraKeys_30d": 2,
+   "erc6538": 9,
+   "erc6538_30d": 0
+  },
+  "base": {
+   "name": "Base",
+   "chainId": 8453,
+   "explorer": "https://basescan.org",
+   "payments": 8601,
+   "payments30d": 24,
+   "registrations": 2484,
+   "registrations30d": 4,
+   "umbra": 7950,
+   "umbra_30d": 20,
+   "erc5564": 651,
+   "erc5564_30d": 4,
+   "umbraKeys": 2470,
+   "umbraKeys_30d": 2,
+   "erc6538": 14,
+   "erc6538_30d": 2
+  },
+  "gnosis": {
+   "name": "Gnosis",
+   "chainId": 100,
+   "explorer": "https://gnosisscan.io",
+   "payments": 205,
+   "payments30d": 0,
+   "registrations": 189,
+   "registrations30d": 0,
+   "umbra": 202,
+   "umbra_30d": 0,
+   "erc5564": 3,
+   "erc5564_30d": 0,
+   "umbraKeys": 189,
+   "umbraKeys_30d": 0,
+   "erc6538": 0,
+   "erc6538_30d": 0
+  }
+ },
+ "totals": {
+  "payments": 309608,
+  "payments30d": 144,
+  "registrations": 84331,
+  "registrations30d": 41,
+  "umbra": 308666,
+  "umbra_30d": 113,
+  "erc5564": 942,
+  "erc5564_30d": 31,
+  "umbraKeys": 84278,
+  "umbraKeys_30d": 32,
+  "erc6538": 53,
+  "erc6538_30d": 9,
+  "chains": 6,
+  "chainsWithPayments30d": 4
+ },
+ "volumeClaim": {
+  "usd": 160000000,
+  "source": "https://checker.gitcoin.co/public/project/show/umbra",
+  "note": "self-reported by Umbra",
+  "dated": false,
+  "text": "Umbra says \"$160 Million in value\" on its Gitcoin grant page (undated). Not computed or checked here."
+ },
+ "excluded": {
+  "note": "ERC-5564 announcements whose caller (topic3) is an ephemeral contract are left out of every count.",
+  "erc5564Callers": [
+   "0xEed50C2F906AF5e53f851D21bE79Dd66fAddDe37",
+   "0x2311918fCD469848B99E787541720cc12A4F4123"
+  ]
+ },
+ "contracts": {
+  "umbra": "0xFb2dc580Eed955B528407b4d36FfaFe3da685401",
+  "umbraStealthKeyRegistry": "0x31fe56609C65Cd0C510E7125f051D440424D38f3",
+  "erc5564Announcer": "0x55649E01B5Df198D18D95b5cc5051630cfD45564",
+  "erc6538Registry": "0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538"
+ },
+ "topics": {
+  "umbraAnnouncement": "0x29877766fa2bfe3b90008d6d92f965eca91cbc5757ed775740e460799fb92219",
+  "umbraStealthKeyChanged": "0xe879dede910dd3b22239a11044df83c95adcd4b54003516f42866cc1fe4f0a19",
+  "erc5564Announcement": "0x5f0eab8057630ba7676c49b4f21a0231414e79474595be8e4c432fbf6bf0f4e7",
+  "erc6538StealthMetaAddressSet": "0x4e739a47dfa4fd3cfa92f8fe760cebe125565927e5c422cb28e7aa388a067af9"
+ },
+ "proofs": {
+  "explorer": {
+   "ethereum": {
+    "umbra": "https://etherscan.io/address/0xFb2dc580Eed955B528407b4d36FfaFe3da685401#events",
+    "umbraKeys": "https://etherscan.io/address/0x31fe56609C65Cd0C510E7125f051D440424D38f3#events",
+    "erc5564": "https://etherscan.io/address/0x55649E01B5Df198D18D95b5cc5051630cfD45564#events",
+    "erc6538": "https://etherscan.io/address/0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538#events"
+   },
+   "arbitrum": {
+    "umbra": "https://arbiscan.io/address/0xFb2dc580Eed955B528407b4d36FfaFe3da685401#events",
+    "umbraKeys": "https://arbiscan.io/address/0x31fe56609C65Cd0C510E7125f051D440424D38f3#events",
+    "erc5564": "https://arbiscan.io/address/0x55649E01B5Df198D18D95b5cc5051630cfD45564#events",
+    "erc6538": "https://arbiscan.io/address/0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538#events"
+   },
+   "optimism": {
+    "umbra": "https://optimistic.etherscan.io/address/0xFb2dc580Eed955B528407b4d36FfaFe3da685401#events",
+    "umbraKeys": "https://optimistic.etherscan.io/address/0x31fe56609C65Cd0C510E7125f051D440424D38f3#events",
+    "erc5564": "https://optimistic.etherscan.io/address/0x55649E01B5Df198D18D95b5cc5051630cfD45564#events",
+    "erc6538": "https://optimistic.etherscan.io/address/0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538#events"
+   },
+   "polygon": {
+    "umbra": "https://polygonscan.com/address/0xFb2dc580Eed955B528407b4d36FfaFe3da685401#events",
+    "umbraKeys": "https://polygonscan.com/address/0x31fe56609C65Cd0C510E7125f051D440424D38f3#events",
+    "erc5564": "https://polygonscan.com/address/0x55649E01B5Df198D18D95b5cc5051630cfD45564#events",
+    "erc6538": "https://polygonscan.com/address/0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538#events"
+   },
+   "base": {
+    "umbra": "https://basescan.org/address/0xFb2dc580Eed955B528407b4d36FfaFe3da685401#events",
+    "umbraKeys": "https://basescan.org/address/0x31fe56609C65Cd0C510E7125f051D440424D38f3#events",
+    "erc5564": "https://basescan.org/address/0x55649E01B5Df198D18D95b5cc5051630cfD45564#events",
+    "erc6538": "https://basescan.org/address/0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538#events"
+   },
+   "gnosis": {
+    "umbra": "https://gnosisscan.io/address/0xFb2dc580Eed955B528407b4d36FfaFe3da685401#events",
+    "umbraKeys": "https://gnosisscan.io/address/0x31fe56609C65Cd0C510E7125f051D440424D38f3#events",
+    "erc5564": "https://gnosisscan.io/address/0x55649E01B5Df198D18D95b5cc5051630cfD45564#events",
+    "erc6538": "https://gnosisscan.io/address/0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538#events"
+   }
+  },
+  "last30d": {
+   "ethereum": {
+    "umbra": "https://api.etherscan.io/v2/api?chainid=1&module=logs&action=getLogs&address=0xFb2dc580Eed955B528407b4d36FfaFe3da685401&topic0=0x29877766fa2bfe3b90008d6d92f965eca91cbc5757ed775740e460799fb92219&fromBlock=26108081&toBlock=26323364&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "umbraKeys": "https://api.etherscan.io/v2/api?chainid=1&module=logs&action=getLogs&address=0x31fe56609C65Cd0C510E7125f051D440424D38f3&topic0=0xe879dede910dd3b22239a11044df83c95adcd4b54003516f42866cc1fe4f0a19&fromBlock=26108081&toBlock=26323364&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "erc5564": "https://api.etherscan.io/v2/api?chainid=1&module=logs&action=getLogs&address=0x55649E01B5Df198D18D95b5cc5051630cfD45564&topic0=0x5f0eab8057630ba7676c49b4f21a0231414e79474595be8e4c432fbf6bf0f4e7&fromBlock=26108081&toBlock=26323364&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "erc6538": "https://api.etherscan.io/v2/api?chainid=1&module=logs&action=getLogs&address=0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538&topic0=0x4e739a47dfa4fd3cfa92f8fe760cebe125565927e5c422cb28e7aa388a067af9&fromBlock=26108081&toBlock=26323364&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY"
+   },
+   "arbitrum": {
+    "umbra": "https://api.etherscan.io/v2/api?chainid=42161&module=logs&action=getLogs&address=0xFb2dc580Eed955B528407b4d36FfaFe3da685401&topic0=0x29877766fa2bfe3b90008d6d92f965eca91cbc5757ed775740e460799fb92219&fromBlock=511139923&toBlock=520415228&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "umbraKeys": "https://api.etherscan.io/v2/api?chainid=42161&module=logs&action=getLogs&address=0x31fe56609C65Cd0C510E7125f051D440424D38f3&topic0=0xe879dede910dd3b22239a11044df83c95adcd4b54003516f42866cc1fe4f0a19&fromBlock=511139923&toBlock=520415228&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "erc5564": "https://api.etherscan.io/v2/api?chainid=42161&module=logs&action=getLogs&address=0x55649E01B5Df198D18D95b5cc5051630cfD45564&topic0=0x5f0eab8057630ba7676c49b4f21a0231414e79474595be8e4c432fbf6bf0f4e7&fromBlock=511139923&toBlock=520415228&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "erc6538": "https://api.etherscan.io/v2/api?chainid=42161&module=logs&action=getLogs&address=0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538&topic0=0x4e739a47dfa4fd3cfa92f8fe760cebe125565927e5c422cb28e7aa388a067af9&fromBlock=511139923&toBlock=520415228&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY"
+   },
+   "optimism": {
+    "umbra": "https://api.etherscan.io/v2/api?chainid=10&module=logs&action=getLogs&address=0xFb2dc580Eed955B528407b4d36FfaFe3da685401&topic0=0x29877766fa2bfe3b90008d6d92f965eca91cbc5757ed775740e460799fb92219&fromBlock=157693411&toBlock=158989411&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "umbraKeys": "https://api.etherscan.io/v2/api?chainid=10&module=logs&action=getLogs&address=0x31fe56609C65Cd0C510E7125f051D440424D38f3&topic0=0xe879dede910dd3b22239a11044df83c95adcd4b54003516f42866cc1fe4f0a19&fromBlock=157693411&toBlock=158989411&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "erc5564": "https://api.etherscan.io/v2/api?chainid=10&module=logs&action=getLogs&address=0x55649E01B5Df198D18D95b5cc5051630cfD45564&topic0=0x5f0eab8057630ba7676c49b4f21a0231414e79474595be8e4c432fbf6bf0f4e7&fromBlock=157693411&toBlock=158989411&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "erc6538": "https://api.etherscan.io/v2/api?chainid=10&module=logs&action=getLogs&address=0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538&topic0=0x4e739a47dfa4fd3cfa92f8fe760cebe125565927e5c422cb28e7aa388a067af9&fromBlock=157693411&toBlock=158989411&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY"
+   },
+   "polygon": {
+    "umbra": "https://api.etherscan.io/v2/api?chainid=137&module=logs&action=getLogs&address=0xFb2dc580Eed955B528407b4d36FfaFe3da685401&topic0=0x29877766fa2bfe3b90008d6d92f965eca91cbc5757ed775740e460799fb92219&fromBlock=94853640&toBlock=96581429&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "umbraKeys": "https://api.etherscan.io/v2/api?chainid=137&module=logs&action=getLogs&address=0x31fe56609C65Cd0C510E7125f051D440424D38f3&topic0=0xe879dede910dd3b22239a11044df83c95adcd4b54003516f42866cc1fe4f0a19&fromBlock=94853640&toBlock=96581429&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "erc5564": "https://api.etherscan.io/v2/api?chainid=137&module=logs&action=getLogs&address=0x55649E01B5Df198D18D95b5cc5051630cfD45564&topic0=0x5f0eab8057630ba7676c49b4f21a0231414e79474595be8e4c432fbf6bf0f4e7&fromBlock=94853640&toBlock=96581429&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "erc6538": "https://api.etherscan.io/v2/api?chainid=137&module=logs&action=getLogs&address=0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538&topic0=0x4e739a47dfa4fd3cfa92f8fe760cebe125565927e5c422cb28e7aa388a067af9&fromBlock=94853640&toBlock=96581429&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY"
+   },
+   "base": {
+    "umbra": "https://api.etherscan.io/v2/api?chainid=8453&module=logs&action=getLogs&address=0xFb2dc580Eed955B528407b4d36FfaFe3da685401&topic0=0x29877766fa2bfe3b90008d6d92f965eca91cbc5757ed775740e460799fb92219&fromBlock=52098126&toBlock=53394126&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "umbraKeys": "https://api.etherscan.io/v2/api?chainid=8453&module=logs&action=getLogs&address=0x31fe56609C65Cd0C510E7125f051D440424D38f3&topic0=0xe879dede910dd3b22239a11044df83c95adcd4b54003516f42866cc1fe4f0a19&fromBlock=52098126&toBlock=53394126&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "erc5564": "https://api.etherscan.io/v2/api?chainid=8453&module=logs&action=getLogs&address=0x55649E01B5Df198D18D95b5cc5051630cfD45564&topic0=0x5f0eab8057630ba7676c49b4f21a0231414e79474595be8e4c432fbf6bf0f4e7&fromBlock=52098126&toBlock=53394126&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "erc6538": "https://api.etherscan.io/v2/api?chainid=8453&module=logs&action=getLogs&address=0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538&topic0=0x4e739a47dfa4fd3cfa92f8fe760cebe125565927e5c422cb28e7aa388a067af9&fromBlock=52098126&toBlock=53394126&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY"
+   },
+   "gnosis": {
+    "umbra": "https://api.etherscan.io/v2/api?chainid=100&module=logs&action=getLogs&address=0xFb2dc580Eed955B528407b4d36FfaFe3da685401&topic0=0x29877766fa2bfe3b90008d6d92f965eca91cbc5757ed775740e460799fb92219&fromBlock=48558286&toBlock=49062480&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "umbraKeys": "https://api.etherscan.io/v2/api?chainid=100&module=logs&action=getLogs&address=0x31fe56609C65Cd0C510E7125f051D440424D38f3&topic0=0xe879dede910dd3b22239a11044df83c95adcd4b54003516f42866cc1fe4f0a19&fromBlock=48558286&toBlock=49062480&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "erc5564": "https://api.etherscan.io/v2/api?chainid=100&module=logs&action=getLogs&address=0x55649E01B5Df198D18D95b5cc5051630cfD45564&topic0=0x5f0eab8057630ba7676c49b4f21a0231414e79474595be8e4c432fbf6bf0f4e7&fromBlock=48558286&toBlock=49062480&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY",
+    "erc6538": "https://api.etherscan.io/v2/api?chainid=100&module=logs&action=getLogs&address=0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538&topic0=0x4e739a47dfa4fd3cfa92f8fe760cebe125565927e5c422cb28e7aa388a067af9&fromBlock=48558286&toBlock=49062480&page=1&offset=1000&apikey=YOUR_ETHERSCAN_KEY"
+   }
+  },
+  "getLogs": "https://api.etherscan.io/v2/api?chainid={chainId}&module=logs&action=getLogs&address={contract}&topic0={topic0}&fromBlock={from}&toBlock={to}&page={N}&offset=1&apikey=YOUR_ETHERSCAN_KEY",
+  "check": "A count N over a block range is right when page N (offset=1) returns a log and page N+1 returns none. Etherscan allows page x offset up to 10,000, so longer histories are counted in block ranges and added up."
+ },
+ "notCovered": [
+  "Scroll (not checked)",
+  "Fluidkey and any app that never announces onchain"
+ ],
+ "source": "https://github.com/siriusthemaster/ephemeral/tree/stats-data"
+}
