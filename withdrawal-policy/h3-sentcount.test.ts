@@ -36,7 +36,7 @@ function explorer(opts: { lagging: boolean; sender?: Hex }) {
   globalThis.fetch = (async (u: string) => {
     const p = new URL(u).pathname.toLowerCase();
     if (!opts.lagging && p.endsWith(`/addresses/${sender}/transactions`))
-      return json({ items: [{ from: { hash: sender }, to: { hash: D }, value: '1000' }], next_page_params: null });
+      return json({ items: [{ from: { hash: sender }, to: { hash: D }, value: '1000', raw_input: '0x' }], next_page_params: null });
     return json({ items: [], next_page_params: null });
   }) as typeof fetch;
 }

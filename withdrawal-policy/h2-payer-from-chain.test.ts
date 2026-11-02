@@ -146,7 +146,7 @@ test('fail closed: while any funding sender cannot be read, the wallet passes no
   const txs = { [h(1)]: { from: PAYER, to: null, value: 0n, block: 100n }, [h(2)]: { from: PAYER, to: S, value: ETH / 2n, block: 101n } };
   for (const [name, c, gap] of [
     ['ETH not accounted for', { balance: (ETH * 6n) / 10n, txs }, 'eth'],
-    ['logs refused', { balance: ETH / 2n, txs, logsDown: true }, 'unread'],
+    ['logs refused', { balance: ETH / 2n, txs, logsDown: true }, 'logs'], // its own gap since 31 Oct: set an RPC in Settings
     ['already sent, no explorer', { balance: ETH / 10n, nonce: 1, txs }, 'spent'],
     ['token held without a Transfer log', { balance: ETH / 2n, txs, tokens: { [low(TOKEN)]: 5n } }, 'token'],
   ] as [string, Chain, string][]) {

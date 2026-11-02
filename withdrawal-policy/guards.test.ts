@@ -147,7 +147,8 @@ test('the block message names the address', () => {
   assert.match(text(UNSPENDABLE[3]!), /ERC-6538 Registry/);
 });
 test('control: addresses next to the blocked ones pass clean', () => {
-  for (const d of ['0x0000000000000000000000000000000000000001', '0x000000000000000000000000000000000000deae', '0x6666666666666666666666666666666666666666']) {
+  // 0x...12: just past the precompiles 0x...01 to 0x...11, which are blocked since 31 Oct
+  for (const d of ['0x0000000000000000000000000000000000000012', '0x000000000000000000000000000000000000deae', '0x6666666666666666666666666666666666666666']) {
     const c = withdrawChecks({ ...fresh, destination: d });
     assert.equal(blocking(c), false, d);
     assert.equal(warnings(c).length, 0, d);

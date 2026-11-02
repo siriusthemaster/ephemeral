@@ -129,7 +129,10 @@ export function tokenCallRecipient(sender: string, input: unknown): string | nul
 
 /** Everything one address sent: ETH with a value, token transfers, and what its zero-value transactions did.
  *  `txCount` = transactions it signed, as indexed. `indexed` identifies each token transfer the explorer has (see
- *  logKey/toKey), to compare with the node's logs. A transaction it signed that moved no ETH is read from its calldata:
+ *  logKey/toKey), to compare with the node's logs. A transaction it signed that moved ETH counts as a send to `to` only
+ *  with empty calldata; with calldata it is a contract call (a swap router, a bridge, a multicall) whose final recipient
+ *  cannot be read, and without `to` it created a contract: both are counted in `unattributed` (bug bounty, 27 Oct), and
+ *  `to` still counts as a past destination. A transaction it signed that moved no ETH is read from its calldata:
  *  - no calldata: a plain transaction to `to`, a public link like any send, so `to` is a past destination;
  *  - transfer or transferFrom of its own tokens: the recipient is a past destination, even if the token logged nothing;
  *  - anything else (approve, setApprovalForAll, an unknown call, unreadable input, no `to`): counted in `unattributed`,
@@ -148,11 +151,22 @@ async function sentBy(
   const txs = await pages<BsTx>(base, `/addresses/${address}/transactions`, signal);
   const txCount = txs.filter(own).length;
   const calls: BsTx[] = [];
+  const sends: BsTx[] = []; // signed by the address and moved ETH: a plain send only without calldata
   for (const t of txs) {
     const to = t.to?.hash;
-    if (to && t.from?.hash && t.value && t.value !== '0') out.push({ from: t.from.hash, to });
-    else if (own(t) && (!t.value || t.value === '0')) calls.push(t); // moved no ETH: what it did is read from its calldata below
+    const moved = !!t.value && t.value !== '0';
+    if (to && t.from?.hash && moved) out.push({ from: t.from.hash, to });
+    if (!own(t)) continue;
+    if (moved) sends.push(t);
+    else calls.push(t); // moved no ETH: what it did is read from its calldata below
   }
+  // the calldata of a transaction: from the list, else from /transactions/<hash>; null = could not be read
+  const inputOf = async (t: BsTx): Promise<string | null> => {
+    if (typeof t.raw_input === 'string') return t.raw_input;
+    if (typeof t.hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(t.hash)) return null;
+    const full = await get<BsTx>(new URL(`${base}/transactions/${t.hash}`), signal).catch(() => null);
+    return typeof full?.raw_input === 'string' ? full.raw_input : null;
+  };
   const transfers = await pages<BsTokenTransfer>(base, `/addresses/${address}/token-transfers`, signal);
   for (const t of transfers) {
     const to = t.to?.hash;
@@ -164,13 +178,18 @@ async function sentBy(
     else if (to) indexed.add(toKey(tx, to)); // no log index from this explorer version: match on transaction + recipient
   }
   let unattributed = 0;
+  // An ETH send with calldata, or one that creates a contract, cannot be followed to its final recipient (27 Oct)
+  for (const t of sends) {
+    if (!t.to?.hash) {
+      unattributed++;
+      continue;
+    }
+    const input = await inputOf(t);
+    if (input === null || (input !== '' && input.toLowerCase() !== '0x')) unattributed++;
+  }
   for (const t of calls) {
     const to = t.to?.hash;
-    let input = typeof t.raw_input === 'string' ? t.raw_input : null;
-    if (input === null && typeof t.hash === 'string' && /^0x[0-9a-fA-F]{64}$/.test(t.hash)) {
-      const full = await get<BsTx>(new URL(`${base}/transactions/${t.hash}`), signal).catch(() => null);
-      input = typeof full?.raw_input === 'string' ? full.raw_input : null;
-    }
+    const input = await inputOf(t);
     if (!to || input === null) {
       unattributed++;
       continue;
@@ -298,6 +317,8 @@ function nonceMap(sentCount: Record<string, number> | null | undefined): Map<str
  *   transferWithAuthorization) and an ERC-1155 move by an approved operator, none of which use its nonce.
  * A zero-value transaction the address signed that is neither a plain transaction nor a transfer of its own tokens
  * (an approval, an unknown call, unreadable input) also makes `ok` false: it can let tokens leave later without a trace.
+ * So does an ETH send with calldata (a contract call: where the ETH ended up cannot be read from it) and an ETH send
+ * that creates a contract (bug bounty, 27 Oct).
  * Without `tokenLogs`, or when the node cannot be read, token transfers cannot be confirmed and `ok` is false (fail safe).
  * `history` then holds whatever did load.
  */
@@ -328,7 +349,7 @@ export async function loadWithdrawalHistory(
         // no usable nonce: the explorer cannot be checked against the chain, so the history is incomplete (fail safe)
         if (expected === undefined || expected === null) ok = false;
         else if (r.txCount < expected) ok = false; // explorer lags the chain: history incomplete
-        if (r.unattributed > 0) ok = false; // a zero-value call we cannot attribute: history incomplete (fail safe)
+        if (r.unattributed > 0) ok = false; // a call we cannot attribute (zero-value or value-bearing): history incomplete
         if (tokenLogs && latest !== null && (await unindexedTokenTransfers(tokenLogs, a, latest, r.indexed, signal)) > 0)
           ok = false; // a token transfer on chain is missing from the explorer: history incomplete
       } catch {
