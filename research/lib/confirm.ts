@@ -16,6 +16,11 @@
  *   - otherwise nothing arrived and the announcement is left out (counted as unfunded).
  * The payment transaction (its sender is the payer for H2) is the transaction that moved the value.
  *
+ * A stranger can also send a token to the address (bug bounty N14, 3 Nov): when the announcement claims ETH and ETH
+ * arrived, a token counts as the payment only if it came in the same transaction as that ETH (a gas tip, StealthBuy)
+ * or another announcement of the address claims that token. Unclaimed token dust is counted in `tokenDust` and does
+ * not turn a real ETH payment into a token payment.
+ *
  * Umbra announcements stay as decoded: the Umbra contract emits them itself while it moves the funds.
  * Pure function: transfers come in, payments go out; no address leaves this module.
  */
@@ -36,6 +41,8 @@ export interface Confirmed {
   unfunded: number;
   /** ERC-5564 announcements whose metadata named another asset than the one that arrived */
   assetMismatch: number;
+  /** ERC-5564 announcements claiming ETH with ETH arrived, where tokens nobody claimed arrived too: not the payment */
+  tokenDust: number;
 }
 
 export function confirmPayments(
@@ -46,6 +53,7 @@ export function confirmPayments(
   const seen = new Set<string>();
   let unfunded = 0;
   let assetMismatch = 0;
+  let tokenDust = 0;
   const firstAnnounced = new Map<string, number>();
   for (const p of logs) {
     if (p.source === 'erc5564') firstAnnounced.set(p.stealth, Math.min(p.blockNumber, firstAnnounced.get(p.stealth) ?? Infinity));
@@ -63,8 +71,16 @@ export function confirmPayments(
         t.block >= p.blockNumber - before &&
         t.block <= p.blockNumber + WINDOW_AFTER,
     );
-    const tokens = arrived.filter((t) => !ETH_CATEGORIES.has(t.category) && t.token !== null);
+    let tokens = arrived.filter((t) => !ETH_CATEGORIES.has(t.category) && t.token !== null);
     const eth = arrived.filter((t) => ETH_CATEGORIES.has(t.category));
+    if (p.asset === 'ETH' && eth.length > 0 && tokens.length > 0) {
+      const claimed = (t: TransferLite) =>
+        eth.some((e) => e.hash === t.hash) ||
+        logs.some((l) => l.source === 'erc5564' && l.stealth === p.stealth && l.asset === 'TOKEN' && (l.token === null || l.token === t.token));
+      const real = tokens.filter(claimed);
+      if (real.length < tokens.length) tokenDust++;
+      tokens = real;
+    }
     const asset = tokens.length > 0 ? 'TOKEN' : eth.length > 0 ? 'ETH' : null;
     if (asset === null) {
       unfunded++;
@@ -75,7 +91,7 @@ export function confirmPayments(
       p.asset !== 'UNKNOWN' && (p.asset !== asset || (asset === 'TOKEN' && p.token !== null && !picked.some((t) => t.token === p.token)));
     if (claimedOther) assetMismatch++;
     for (const t of picked) {
-      const key = `${t.hash}|${t.token ?? 'eth'}`;
+      const key = `${t.hash}|${p.stealth}|${t.token ?? 'eth'}`; // one transaction can pay several stealth addresses (N06)
       if (seen.has(key)) continue; // two announcements for one transfer: one payment
       seen.add(key);
       payments.push({
@@ -90,5 +106,5 @@ export function confirmPayments(
       });
     }
   }
-  return { payments, unfunded, assetMismatch };
+  return { payments, unfunded, assetMismatch, tokenDust };
 }
