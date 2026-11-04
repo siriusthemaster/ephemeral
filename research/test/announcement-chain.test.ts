@@ -181,3 +181,35 @@ test('Umbra announcements pass through unchanged: the Umbra contract moves the f
   assert.deepEqual(r.payments, [u]);
   assert.equal(r.unfunded, 0);
 });
+
+test('N14 (Rusdi, 3 Nov, Low): token dust from a stranger in the 12 blocks after the announcement does not turn a real ETH payment into a token payment', () => {
+  const at = C + 20_000;
+  const eth = arrive(S(6), 20, at + 1, null);
+  const dust = arrive(S(6), 21, at + 5, TA, X);
+  const r = confirmPayments([ann(S(6), 'ETH', null, 19, at)], byStealth([eth, dust]));
+  assert.deepEqual(r.payments.map((p) => [p.asset, p.token, p.txHash]), [['ETH', null, h(20)]]);
+  assert.equal(r.tokenDust, 1);
+  assert.equal(r.assetMismatch, 0);
+  // the token is the payment when another announcement of the address claims it (a real token payment next to an ETH claim)
+  const claimed = confirmPayments([ann(S(6), 'ETH', null, 19, at), ann(S(6), 'TOKEN', TA, 22, at + 2)], byStealth([eth, dust]));
+  assert.ok(claimed.payments.some((p) => p.asset === 'TOKEN' && p.token === TA));
+  // the token arrives in the same transaction as the ETH: a gas tip, so the token is the payment (as before)
+  const tip = confirmPayments([ann(S(6), 'ETH', null, 19, at)], byStealth([arrive(S(6), 23, at + 1, null), arrive(S(6), 23, at + 1, TA)]));
+  assert.deepEqual(tip.payments.map((p) => p.asset), ['TOKEN']);
+  // without ETH the token still decides (the stranger's ETH claim for a token-paid address, tested above)
+  assert.equal(confirmPayments([ann(S(6), 'ETH', null, 19, at)], byStealth([dust])).payments[0]?.asset, 'TOKEN');
+});
+
+test('N06 (Swaplane EPH-10, 3 Nov, Low): one transaction that pays two stealth addresses is two payments, not one', () => {
+  const at = C + 30_000;
+  const logs = [ann(S(7), 'ETH', null, 30, at), ann(S(8), 'ETH', null, 31, at)];
+  const batch = [arrive(S(7), 32, at + 1, null), arrive(S(8), 32, at + 1, null)]; // one tx, two recipients
+  const r = confirmPayments(logs, byStealth(batch));
+  assert.deepEqual(r.payments.map((p) => p.stealth).sort(), [S(7), S(8)].sort());
+  // the same for a token batch
+  const tokens = confirmPayments([ann(S(7), 'TOKEN', TA, 30, at), ann(S(8), 'TOKEN', TA, 31, at)], byStealth([arrive(S(7), 33, at, TA), arrive(S(8), 33, at, TA)]));
+  assert.equal(tokens.payments.length, 2);
+  // two announcements for one transfer to the SAME address are still one payment
+  const twice = confirmPayments([ann(S(7), 'ETH', null, 30, at), ann(S(7), 'ETH', null, 34, at + 1)], byStealth([batch[0]!]));
+  assert.equal(twice.payments.length, 1);
+});
