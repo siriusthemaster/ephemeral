@@ -101,7 +101,7 @@ test("Swaplane / One Cursor 24 Oct: a stranger's ETH announcement does not hide 
   const withdrawals = [out(S(1), P, 'token', TA, 101)];
 
   // before 31 Oct the announcement alone decided, so the address looked ETH-paid and the token back to the payer
-  // vanished; since 6 Nov the first payment's asset decides too (EPH-17), so even that view keeps the token
+  // vanished; since 6 Nov any asset that was paid in leaving counts (F34, EPH-17), so even that view keeps the token
   const before = analyze(world(toPayments(logs, senders), withdrawals), opts).all;
   assert.equal(before.withdrawn, 1);
 
@@ -124,7 +124,7 @@ test("a stranger's ETH announcement does not hide H5 either (token-only address,
   const registrations = [{ registrant: R, block: C + 10, registry: 'erc6538' as const }];
   const withdrawals = [out(S(2), D1, 'token', TA, 102)];
 
-  // the stranger's ETH claim comes after the token payment, so the first payment's asset (TOKEN) decides (EPH-17)
+  // H5 looks at every address with a token payment, so even the raw announcements keep it (F34)
   const before = analyze(world(toPayments(logs, senders), withdrawals, fundings, registrations), opts).all;
   assert.equal(before.h5, 1);
   const r = confirmPayments(logs, byStealth(transfers));
@@ -309,7 +309,7 @@ test('Adams 4 Nov (F-07): an announcement under another scheme id is not a payme
   assert.equal(other.otherScheme, 2);
 });
 
-test('EPH-17 (Swaplane, 3 Nov): a later, really funded ETH payment does not hide the first payment, a token, and its H2', () => {
+test('EPH-17 (Swaplane, 3 Nov): a later, really funded ETH payment does not hide a token payment and its H2', () => {
   const at = C + 90_000;
   const logs = [ann(S(15), 'TOKEN', TA, 91, at), ann(S(15), 'ETH', null, 93, at + 40)];
   const transfers = [arrive(S(15), 91, at, TA, P), arrive(S(15), 92, at + 41, null, X)]; // 1 wei of ETH from a stranger, later
@@ -319,8 +319,31 @@ test('EPH-17 (Swaplane, 3 Nov): a later, really funded ETH payment does not hide
   assert.equal(m.withdrawn, 1);
   assert.equal(m.h2Any, 1);
   assert.equal(m.identityLinked, 1);
-  // in one block, ETH still comes first as before
+  // the same when both arrive in one block: any asset that was paid in leaving counts
   const same = confirmPayments([ann(S(16), 'TOKEN', TA, 94, at), ann(S(16), 'ETH', null, 95, at)], byStealth([arrive(S(16), 94, at, TA, P), arrive(S(16), 95, at, null, X)]));
   const ms = analyze(world(toPayments(same.payments, { [h(94)]: P, [h(95)]: X }), [out(S(16), P, 'token', TA, 196, at + 100)]), opts).all;
-  assert.equal(ms.withdrawn, 0);
+  assert.equal(ms.withdrawn, 1);
+  assert.equal(ms.h2Any, 1);
+});
+
+test('F34 (Hilmi, 29 Oct): an address paid ETH and a token counts a token-only exit, and its H1, H2 and H5', () => {
+  const at = C + 95_000;
+  const pays: Payment[] = [
+    { source: 'erc5564', stealth: S(17), sender: P, block: at, timestamp: 0, asset: 'ETH', token: null, txHash: h(97) },
+    { source: 'erc5564', stealth: S(17), sender: P, block: at + 1, timestamp: 0, asset: 'TOKEN', token: TA, txHash: h(98) },
+  ];
+  // the owner moves only the token, to the registrant, signing it himself
+  const regs = [{ registrant: R, block: C + 10, registry: 'erc6538' as const }];
+  const m = analyze(world(pays, [out(S(17), R, 'token', TA, 199, at + 100)], [], regs), opts).all;
+  assert.equal(m.withdrawn, 1);
+  assert.equal(m.singleWithdrawal, 1);
+  assert.equal(m.h1Single, 1);
+  // a token exit back to the payer is H2
+  const m2 = analyze(world(pays, [out(S(17), P, 'token', TA, 199, at + 100)]), opts).all;
+  assert.equal(m2.h2Single, 1);
+  // H5: gas from the registrant before the token exit links it, also with an ETH payment on the address
+  const gas = [{ stealth: S(17), txHash: h(200), block: at + 50, from: R }];
+  const m3 = analyze(world(pays, [out(S(17), D1, 'token', TA, 199, at + 100)], gas, regs), opts).all;
+  assert.equal(m3.needingOwnGas, 1);
+  assert.equal(m3.h5, 1);
 });
