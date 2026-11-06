@@ -35,6 +35,10 @@ export interface Summary {
     unfundedAnnouncements: number;
     /** ERC-5564 announcements whose metadata named another asset than the chain shows */
     announcementAssetMismatch: number;
+    /** ERC-5564 announcements next to which tokens not bound to them arrived: counted as dust, not as the payment */
+    announcementTokenDust: number;
+    /** ERC-5564 announcements under another scheme id than 1: left out */
+    otherSchemeAnnouncements: number;
   };
   /** sha256 over everything except generatedAt and rpc stats: two scans of the same range must match */
   fingerprint: string;
@@ -101,7 +105,9 @@ export function toMarkdown(s: Summary): string {
     `Data quality: ${n(s.quality.undecodedLogs)} undecoded logs, ${n(s.quality.truncatedTransferLookups)} truncated transfer lookups, ` +
       `${n(s.quality.notFreshStealthAddresses)} announced addresses left out because they had sent transactions before their first payment, ` +
       `${n(s.quality.unfundedAnnouncements)} ERC-5564 announcements left out because no value reached the address next to them, ` +
-      `${n(s.quality.announcementAssetMismatch)} whose metadata named another asset than the one that arrived.`,
+      `${n(s.quality.announcementAssetMismatch)} whose metadata named another asset than the one that arrived, ` +
+      `${n(s.quality.announcementTokenDust)} with token dust next to them that was not counted as the payment, ` +
+      `${n(s.quality.otherSchemeAnnouncements)} under another scheme id than 1 left out.`,
     '',
     '## Notes',
     '',

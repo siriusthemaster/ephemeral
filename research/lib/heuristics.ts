@@ -197,12 +197,15 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
       if (v.paymentTxs.has(w.txHash) || w.block < firstBlock) continue;
       if (scope.asOfBlock !== undefined && w.block >= scope.asOfBlock) continue;
       // Count only what the owner did: signed by the stealth address, an Umbra token withdrawal,
-      // a smart-account stealth address, or a relayed move of the very token that was paid in.
+      // a relayed move of the very token that was paid in, or ETH leaving a smart-account stealth address.
+      // A smart account or an EIP-7702 delegated address does not make every event owned: anyone can emit a
+      // Transfer log "from" it in a fake token contract, and a delegation made later would make such an
+      // earlier event look owner-made (bug bounty F38). ETH cannot be faked that way, a token never paid in can.
       const owned =
         w.kind === 'umbra-token' ||
         w.txFrom === addr ||
-        isSmartAccount ||
-        (w.kind === 'token' && w.token !== null && v.tokens.has(w.token));
+        (w.kind === 'token' && w.token !== null && v.tokens.has(w.token)) ||
+        (isSmartAccount && w.kind === 'eth');
       if (owned) v.accepted.push(w);
     }
     out.push(v);

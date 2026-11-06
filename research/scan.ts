@@ -306,6 +306,8 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
       notFreshStealthAddresses: preUsed.size,
       unfundedAnnouncements: confirmed.unfunded,
       announcementAssetMismatch: confirmed.assetMismatch,
+      announcementTokenDust: confirmed.tokenDust,
+      otherSchemeAnnouncements: decoded.otherScheme,
     },
   };
   const summary: Summary = {
