@@ -50,7 +50,7 @@ export const METHOD_NOTES = [
   'Unit of analysis is the stealth address; several payments to one stealth address count once.',
   "paperPct reproduces the paper's metric: stealth addresses emptied in a single withdrawal that went to a registrant (H1) or back to the sender (H2), over all withdrawn. The paper reports 48.51% for Ethereum (4,696 of 9,680).",
   'paperComparable looks at the chain as of the cutoff: Umbra payments, Umbra registrations and withdrawals before it.',
-  'Only withdrawals the owner made count: signed by the stealth address, an Umbra TokenWithdrawal, a smart-account or EIP-7702 delegated stealth address, or a relayed move of the token that was paid in; never before the first payment.',
+  'Only withdrawals the owner made count: signed by the stealth address, an Umbra TokenWithdrawal, ETH leaving a smart-account or EIP-7702 delegated stealth address, or a relayed move of the token that was paid in; never before the first payment or in its block.',
   'Announced addresses that had sent transactions before their first payment are not fresh stealth addresses and are left out.',
   'A withdrawal is judged on the paid asset: an ETH payment by ETH leaving, a token payment by the token leaving; a leftover-gas sweep does not break a single withdrawal.',
   'identityPct is wider: H1 or H2 over any withdrawal, or H5.',

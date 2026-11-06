@@ -196,7 +196,9 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
     };
     const isSmartAccount = ds.contracts.has(addr) || ds.delegated.has(addr);
     for (const w of wBy.get(addr) ?? []) {
-      if (v.paymentTxs.has(w.txHash) || w.block < firstBlock) continue;
+      // Not before the first payment, and not in its block: the scan has no transaction order inside a block, so a
+      // transaction placed before the payment there would count as a withdrawal from a fresh address (F39, 30 Oct).
+      if (v.paymentTxs.has(w.txHash) || w.block <= firstBlock) continue;
       if (scope.asOfBlock !== undefined && w.block >= scope.asOfBlock) continue;
       // Count only what the owner did: signed by the stealth address, an Umbra token withdrawal,
       // a relayed move of the very token that was paid in, or ETH leaving a smart-account stealth address.
