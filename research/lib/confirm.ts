@@ -16,10 +16,17 @@
  *   - otherwise nothing arrived and the announcement is left out (counted as unfunded).
  * The payment transaction (its sender is the payer for H2) is the transaction that moved the value.
  *
- * A stranger can also send a token to the address (bug bounty N14, 3 Nov): when the announcement claims ETH and ETH
- * arrived, a token counts as the payment only if it came in the same transaction as that ETH (a gas tip, StealthBuy)
- * or another announcement of the address claims that token. Unclaimed token dust is counted in `tokenDust` and does
- * not turn a real ETH payment into a token payment.
+ * A stranger can also send a token to the address (bug bounty N14, 3 Nov), and announce it (bug bounty 4 and 5 Nov:
+ * the Announcer is permissionless, so another announcement's claim proves nothing). A token is bound to the
+ * announcement being confirmed only when it arrived in the same transaction as that announcement, in the same
+ * transaction as ETH that arrived (a gas tip, StealthBuy), or when this announcement itself names that exact token;
+ * when its metadata names no token, also when the token came from the sender of arrived ETH (one payer sent the
+ * token and its gas). Bound tokens are the payment. Otherwise arrived ETH is the payment, whatever the metadata says (ETH, a token, a
+ * selector without a token, or too short to read), and the unbound tokens are counted in `tokenDust`. Only when no
+ * ETH arrived do unbound tokens stay the payment (a stranger's ETH claim cannot hide a token-paid address, 24 Oct).
+ * Every announcement is confirmed on its own: a griefer's announcement with its own dust becomes the griefer's own
+ * small payment, never a change to the real one. Only ERC-5564 scheme 1 (secp256k1 with view tags) is read
+ * (decode.ts).
  *
  * Umbra announcements stay as decoded: the Umbra contract emits them itself while it moves the funds.
  * Pure function: transfers come in, payments go out; no address leaves this module.
@@ -41,7 +48,7 @@ export interface Confirmed {
   unfunded: number;
   /** ERC-5564 announcements whose metadata named another asset than the one that arrived */
   assetMismatch: number;
-  /** ERC-5564 announcements claiming ETH with ETH arrived, where tokens nobody claimed arrived too: not the payment */
+  /** ERC-5564 announcements where tokens not bound to them arrived next to the payment: not the payment */
   tokenDust: number;
 }
 
@@ -71,16 +78,23 @@ export function confirmPayments(
         t.block >= p.blockNumber - before &&
         t.block <= p.blockNumber + WINDOW_AFTER,
     );
-    let tokens = arrived.filter((t) => !ETH_CATEGORIES.has(t.category) && t.token !== null);
+    const allTokens = arrived.filter((t) => !ETH_CATEGORIES.has(t.category) && t.token !== null);
     const eth = arrived.filter((t) => ETH_CATEGORIES.has(t.category));
-    if (p.asset === 'ETH' && eth.length > 0 && tokens.length > 0) {
-      const claimed = (t: TransferLite) =>
+    // Metadata that names no token (too short, an unknown selector, or a token selector without the token) cannot
+    // bind a token by name; there a token sent by the same sender as arrived ETH is the payment and the ETH its gas.
+    const namesNoToken = p.asset === 'UNKNOWN' || (p.asset === 'TOKEN' && p.token === null);
+    const bound = allTokens.filter(
+      (t) =>
+        t.hash === p.txHash ||
         eth.some((e) => e.hash === t.hash) ||
-        logs.some((l) => l.source === 'erc5564' && l.stealth === p.stealth && l.asset === 'TOKEN' && (l.token === null || l.token === t.token));
-      const real = tokens.filter(claimed);
-      if (real.length < tokens.length) tokenDust++;
-      tokens = real;
-    }
+        (p.asset === 'TOKEN' && p.token !== null && t.token === p.token) ||
+        (namesNoToken && eth.some((e) => e.from === t.from)),
+    );
+    let tokens: TransferLite[];
+    if (bound.length > 0) tokens = bound;
+    else if (eth.length > 0) tokens = [];
+    else tokens = allTokens; // nothing but tokens arrived: they are what was paid
+    if (tokens.length < allTokens.length) tokenDust++;
     const asset = tokens.length > 0 ? 'TOKEN' : eth.length > 0 ? 'ETH' : null;
     if (asset === null) {
       unfunded++;

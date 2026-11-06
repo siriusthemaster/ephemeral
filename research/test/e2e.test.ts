@@ -201,6 +201,8 @@ test('full scan reproduces the fixture numbers', async () => {
     notFreshStealthAddresses: 1,
     unfundedAnnouncements: 2, // S(13) and the stranger's ETH claim on S(5)
     announcementAssetMismatch: 0,
+    announcementTokenDust: 0,
+    otherSchemeAnnouncements: 0,
   });
   assert.ok(rangeErrors > 0, 'range limit was exercised');
   assert.ok(s.rpc.retries > 0, '429 was retried');

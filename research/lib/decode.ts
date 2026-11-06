@@ -36,6 +36,8 @@ export interface Decoded {
   tokenWithdrawals: TokenWithdrawalLog[];
   registrations: RegistrationLog[];
   skipped: number;
+  /** ERC-5564 announcements under another scheme than 1 (secp256k1 with view tags): not stealth payments we can read */
+  otherScheme: number;
 }
 
 /**
@@ -55,7 +57,7 @@ export function decodeLogs(
   logs: readonly RawLog[],
   addrs: { umbra: string; umbraRegistry: string; announcer: string; registry6538: string },
 ): Decoded {
-  const out: Decoded = { payments: [], tokenWithdrawals: [], registrations: [], skipped: 0 };
+  const out: Decoded = { payments: [], tokenWithdrawals: [], registrations: [], skipped: 0, otherScheme: 0 };
   for (const log of logs) {
     const address = lc(log.address);
     const topic0 = lc(log.topics[0] ?? '');
@@ -86,6 +88,10 @@ export function decodeLogs(
         out.registrations.push({ registrant: lc(args.registrant), blockNumber, registry: 'umbra' });
       } else if (address === addrs.announcer && topic0 === TOPICS.erc5564Announcement) {
         const { args } = decodeEventLog({ abi: [EVENTS.erc5564Announcement], data, topics });
+        if (args.schemeId !== 1n) {
+          out.otherScheme++; // anyone can announce under any scheme id (bug bounty, 4 and 5 Nov)
+          continue;
+        }
         out.payments.push({
           source: 'erc5564',
           txHash,

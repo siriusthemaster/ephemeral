@@ -83,6 +83,33 @@ test('an EIP-7702 delegated stealth address may have a relayer submit its withdr
   assert.equal(analyze(ds, opts).all.withdrawn, fx.expected.all.withdrawn + 1);
 });
 
+test('a smart account or EIP-7702 delegation does not make a fake token event owner-made (F38)', () => {
+  const ds = dataset();
+  // S6 withdraws its ETH itself to a fresh destination
+  ds.withdrawals.push({ stealth: fx.S(6), txHash: fx.h(906), block: 5_556_000, to: fx.D(8), kind: 'eth', token: null, txFrom: fx.S(6), txType: 2, priorityFee: '11' });
+  const base = analyze(ds, opts).all;
+  // a scammer's contract emits Transfer(S6 -> R1) for a token S6 was never paid; S6 is delegated later
+  ds.withdrawals.push({ stealth: fx.S(6), txHash: fx.h(907), block: 5_556_100, to: fx.R1, kind: 'token', token: fx.T9, txFrom: fx.SCAMMER, txType: 2, priorityFee: '12' });
+  ds.delegated.add(fx.S(6));
+  assert.equal(analyze(ds, opts).all.h1Any, base.h1Any, 'a fake token event on a delegated address does not link it to a registrant');
+  ds.delegated.delete(fx.S(6));
+  ds.contracts.add(fx.S(6));
+  assert.equal(analyze(ds, opts).all.h1Any, base.h1Any, 'nor on a smart-account address');
+  // ETH relayed out of a smart account still counts and links when it reaches a registrant
+  ds.withdrawals.push({ stealth: fx.S(6), txHash: fx.h(908), block: 5_556_200, to: fx.R1, kind: 'eth', token: null, txFrom: fx.RELAYER, txType: 2, priorityFee: '13' });
+  assert.equal(analyze(ds, opts).all.h1Any, base.h1Any + 1);
+});
+
+test('a transaction in the first payment block does not count as a withdrawal (F39)', () => {
+  const ds = dataset();
+  const s6 = ds.payments.find((p) => p.stealth === fx.S(6));
+  if (!s6) throw new Error('fixture');
+  ds.withdrawals.push({ stealth: fx.S(6), txHash: fx.h(909), block: s6.block, to: fx.R1, kind: 'eth', token: null, txFrom: fx.S(6), txType: 2, priorityFee: '14' });
+  const r = analyze(ds, opts).all;
+  assert.equal(r.withdrawn, fx.expected.all.withdrawn);
+  assert.equal(r.h1Any, fx.expected.all.h1Any);
+});
+
 test('gas that arrived before the first payment does not link', () => {
   const ds = dataset();
   ds.fundings = ds.fundings.map((f) => (f.stealth === fx.S(5) ? { ...f, block: 5_490_000 } : f));

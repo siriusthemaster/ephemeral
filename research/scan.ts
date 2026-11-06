@@ -226,7 +226,7 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
     return { ...w, txFrom: tx?.from ?? '', txType: tx?.type ?? 0, priorityFee: tx?.priorityFee ?? null };
   });
 
-  // 7. H5: token-only stealth addresses that signed a transaction needed gas. Where did it come from?
+  // 7. H5: stealth addresses paid a token that signed a transaction needed gas. Where did it come from?
   const assetsBy = new Map<string, Set<string>>();
   for (const p of payments) {
     const set = assetsBy.get(p.stealth) ?? new Set<string>();
@@ -236,7 +236,7 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
   const selfSigned = new Set(withdrawals.filter((w) => w.txFrom === w.stealth).map((w) => w.stealth));
   const needGas = [...selfSigned].filter((s) => {
     const a = assetsBy.get(s);
-    return a !== undefined && !a.has('ETH') && a.has('TOKEN'); // same primary-asset rule as the analysis
+    return a !== undefined && a.has('TOKEN'); // every address with a token payment, as in the analysis (F34)
   });
   const incoming = new KV<TransferPage>(join(dir, 'transfers-in.json'), 200);
   await fetchAllTransfers(rpc, needGas, 'to', cfg.fundingCategories, cfg.umbraStartBlock, toBlock, incoming, o.concurrency, 'gas funding');
@@ -306,6 +306,8 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
       notFreshStealthAddresses: preUsed.size,
       unfundedAnnouncements: confirmed.unfunded,
       announcementAssetMismatch: confirmed.assetMismatch,
+      announcementTokenDust: confirmed.tokenDust,
+      otherSchemeAnnouncements: decoded.otherScheme,
     },
   };
   const summary: Summary = {

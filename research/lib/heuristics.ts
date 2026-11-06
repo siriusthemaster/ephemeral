@@ -138,17 +138,19 @@ function primaryAsset(assets: Set<Asset>): Asset {
   return 'UNKNOWN';
 }
 
-/** The asset that decides "withdrawn" left: ETH for an ETH payment, the paid token contract for a token payment.
- *  For a token paid through Umbra only its TokenWithdrawal counts: the tokens wait in the Umbra contract, so a direct
- *  transfer of the same token from the stealth address moves other tokens and must not break single-withdrawal status. */
+/** A withdrawal that decides "withdrawn": any asset that was paid in left (bug bounty F34, 29 Oct; EPH-17, 3 Nov).
+ *  ETH for an ETH payment, the paid token contract for a token payment. Before, an address paid in both counted only
+ *  ETH, so a token exit from it (and its H1, H2 and identity links) dropped out, and one wei of ETH with its own
+ *  announcement from a stranger could hide a token payment's withdrawal. For a token paid through Umbra only its
+ *  TokenWithdrawal counts: the tokens wait in the Umbra contract, so a direct transfer of the same token from the
+ *  stealth address moves other tokens and must not break single-withdrawal status. An address whose only payments
+ *  have an unknown asset counts any exit. */
 function isPrimary(w: Withdrawal, v: StealthView): boolean {
-  if (v.primary === 'ETH') return w.kind === 'eth';
-  if (v.primary === 'TOKEN') {
-    if (w.kind === 'eth' || w.token === null || !v.tokens.has(w.token)) return false;
-    return w.kind === 'umbra-token' || v.directTokens.has(w.token);
-  }
-  return true;
+  if (w.kind === 'eth') return v.assets.has('ETH') || onlyUnknown(v);
+  if (w.token !== null && v.tokens.has(w.token)) return w.kind === 'umbra-token' || v.directTokens.has(w.token);
+  return onlyUnknown(v);
 }
+const onlyUnknown = (v: StealthView): boolean => v.assets.size === 1 && v.assets.has('UNKNOWN');
 
 /** Any asset that was paid in left. An unknown asset (metadata with an unknown selector) cannot be ruled out. */
 function isPaidAsset(w: Withdrawal, v: StealthView): boolean {
@@ -194,15 +196,20 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
     };
     const isSmartAccount = ds.contracts.has(addr) || ds.delegated.has(addr);
     for (const w of wBy.get(addr) ?? []) {
-      if (v.paymentTxs.has(w.txHash) || w.block < firstBlock) continue;
+      // Not before the first payment, and not in its block: the scan has no transaction order inside a block, so a
+      // transaction placed before the payment there would count as a withdrawal from a fresh address (F39, 30 Oct).
+      if (v.paymentTxs.has(w.txHash) || w.block <= firstBlock) continue;
       if (scope.asOfBlock !== undefined && w.block >= scope.asOfBlock) continue;
       // Count only what the owner did: signed by the stealth address, an Umbra token withdrawal,
-      // a smart-account stealth address, or a relayed move of the very token that was paid in.
+      // a relayed move of the very token that was paid in, or ETH leaving a smart-account stealth address.
+      // A smart account or an EIP-7702 delegated address does not make every event owned: anyone can emit a
+      // Transfer log "from" it in a fake token contract, and a delegation made later would make such an
+      // earlier event look owner-made (bug bounty F38). ETH cannot be faked that way, a token never paid in can.
       const owned =
         w.kind === 'umbra-token' ||
         w.txFrom === addr ||
-        isSmartAccount ||
-        (w.kind === 'token' && w.token !== null && v.tokens.has(w.token));
+        (w.kind === 'token' && w.token !== null && v.tokens.has(w.token)) ||
+        (isSmartAccount && w.kind === 'eth');
       if (owned) v.accepted.push(w);
     }
     out.push(v);
@@ -271,10 +278,11 @@ function measure(ds: Dataset, scope: Scope, only?: (v: StealthView) => boolean):
     if (h1a) m.h1Any++;
     if (h2a) m.h2Any++;
 
-    // H5: a token-only stealth address that signed its own transaction needed ETH for gas first.
+    // H5: a stealth address paid a token that signed its own transaction needed ETH for gas first. Every address
+    // with a token payment counts, also one paid ETH too (F34): a payer's ETH is a payment, not a funding.
     let h5 = false;
     const selfBlocks = v.accepted.filter((w) => w.txFrom === v.addr).map((w) => w.block);
-    if (v.primary === 'TOKEN' && selfBlocks.length > 0) {
+    if (v.assets.has('TOKEN') && selfBlocks.length > 0) {
       m.needingOwnGas++;
       const firstSelf = Math.min(...selfBlocks);
       h5 = (fundBy.get(v.addr) ?? []).some(
