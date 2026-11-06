@@ -100,10 +100,10 @@ test("Swaplane / One Cursor 24 Oct: a stranger's ETH announcement does not hide 
   const senders = { [h(1)]: P, [h(2)]: X };
   const withdrawals = [out(S(1), P, 'token', TA, 101)];
 
-  // before: the announcement alone decided, so the address looked ETH-paid and the token back to the payer vanished
+  // before 31 Oct the announcement alone decided, so the address looked ETH-paid and the token back to the payer
+  // vanished; since 6 Nov the first payment's asset decides too (EPH-17), so even that view keeps the token
   const before = analyze(world(toPayments(logs, senders), withdrawals), opts).all;
-  assert.equal(before.withdrawn, 0);
-  assert.equal(before.h2Any, 0);
+  assert.equal(before.withdrawn, 1);
 
   const r = confirmPayments(logs, byStealth(transfers));
   assert.equal(r.unfunded, 1, 'the ETH claim moved nothing');
@@ -124,8 +124,9 @@ test("a stranger's ETH announcement does not hide H5 either (token-only address,
   const registrations = [{ registrant: R, block: C + 10, registry: 'erc6538' as const }];
   const withdrawals = [out(S(2), D1, 'token', TA, 102)];
 
+  // the stranger's ETH claim comes after the token payment, so the first payment's asset (TOKEN) decides (EPH-17)
   const before = analyze(world(toPayments(logs, senders), withdrawals, fundings, registrations), opts).all;
-  assert.equal(before.h5, 0);
+  assert.equal(before.h5, 1);
   const r = confirmPayments(logs, byStealth(transfers));
   const after = analyze(world(toPayments(r.payments, senders), withdrawals, fundings, registrations), opts).all;
   assert.equal(after.needingOwnGas, 1);
@@ -306,4 +307,20 @@ test('Adams 4 Nov (F-07): an announcement under another scheme id is not a payme
   const other = decodeLogs([log(99n), log(0n)] as never, addrs);
   assert.equal(other.payments.length, 0);
   assert.equal(other.otherScheme, 2);
+});
+
+test('EPH-17 (Swaplane, 3 Nov): a later, really funded ETH payment does not hide the first payment, a token, and its H2', () => {
+  const at = C + 90_000;
+  const logs = [ann(S(15), 'TOKEN', TA, 91, at), ann(S(15), 'ETH', null, 93, at + 40)];
+  const transfers = [arrive(S(15), 91, at, TA, P), arrive(S(15), 92, at + 41, null, X)]; // 1 wei of ETH from a stranger, later
+  const r = confirmPayments(logs, byStealth(transfers));
+  assert.deepEqual(r.payments.map((p) => p.asset).sort(), ['ETH', 'TOKEN']);
+  const m = analyze(world(toPayments(r.payments, { [h(91)]: P, [h(92)]: X }), [out(S(15), P, 'token', TA, 190, at + 100)]), opts).all;
+  assert.equal(m.withdrawn, 1);
+  assert.equal(m.h2Any, 1);
+  assert.equal(m.identityLinked, 1);
+  // in one block, ETH still comes first as before
+  const same = confirmPayments([ann(S(16), 'TOKEN', TA, 94, at), ann(S(16), 'ETH', null, 95, at)], byStealth([arrive(S(16), 94, at, TA, P), arrive(S(16), 95, at, null, X)]));
+  const ms = analyze(world(toPayments(same.payments, { [h(94)]: P, [h(95)]: X }), [out(S(16), P, 'token', TA, 196, at + 100)]), opts).all;
+  assert.equal(ms.withdrawn, 0);
 });

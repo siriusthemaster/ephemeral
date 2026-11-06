@@ -138,6 +138,14 @@ function primaryAsset(assets: Set<Asset>): Asset {
   return 'UNKNOWN';
 }
 
+/** The asset of the first payment decides, ETH first only among payments in that same block. A later payment of
+ *  another asset, even a real one (1 wei of ETH plus its own announcement), cannot hide the first payment's
+ *  withdrawal and its H2 round trip (bug bounty EPH-17, 3 Nov). Only the payer can know a fresh stealth address
+ *  before the first payment arrives. */
+function firstPaymentAsset(ps: readonly Payment[], firstBlock: number): Asset {
+  return primaryAsset(new Set(ps.filter((p) => p.block === firstBlock).map((p) => p.asset)));
+}
+
 /** The asset that decides "withdrawn" left: ETH for an ETH payment, the paid token contract for a token payment.
  *  For a token paid through Umbra only its TokenWithdrawal counts: the tokens wait in the Umbra contract, so a direct
  *  transfer of the same token from the stealth address moves other tokens and must not break single-withdrawal status. */
@@ -189,7 +197,7 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
       directTokens: new Set(ps.filter((p) => p.source !== 'umbra').map((p) => p.token).filter((t): t is string => t !== null)),
       paymentTxs: new Set(ps.map((p) => p.txHash)),
       assets,
-      primary: primaryAsset(assets),
+      primary: firstPaymentAsset(ps, firstBlock),
       accepted: [],
     };
     const isSmartAccount = ds.contracts.has(addr) || ds.delegated.has(addr);
