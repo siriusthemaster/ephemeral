@@ -35,6 +35,8 @@ export interface ScanOpts {
   start: number;
   head: number;
   maxSpan?: number;
+  /** Pause between calls, to stay inside free rate limits. */
+  pauseMs?: number;
   /** Return true to stop (run budget). Checked between ranges. */
   stop?: () => boolean;
   /** Called after every completed range. */
@@ -49,6 +51,7 @@ export async function scanChain(rpc: Rpc, s: ChainState, o: ScanOpts): Promise<b
   let from = s.lastBlock > 0 ? s.lastBlock + 1 : o.start;
   while (from <= o.head) {
     if (o.stop?.()) return false;
+    if (o.pauseMs) await new Promise((r) => setTimeout(r, o.pauseMs));
     const span = Math.max(1, Math.min(s.span, maxSpan));
     const to = Math.min(o.head, from + span - 1);
     let logs: RawLog[];

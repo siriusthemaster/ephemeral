@@ -50,8 +50,8 @@ export class FallbackRpc implements Rpc {
   ) {
     this.fetchImpl = o.fetchImpl ?? fetch;
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-    this.attempts = o.attempts ?? 3;
-    this.rounds = o.rounds ?? 2;
+    this.attempts = o.attempts ?? 4;
+    this.rounds = o.rounds ?? 3;
     this.timeoutMs = o.timeoutMs ?? 60_000;
   }
 
@@ -96,31 +96,45 @@ export class FallbackRpc implements Rpc {
     }
   }
 
+  private dead = new Set<string>();
+
   private async run(make: () => unknown, parse: (j: unknown) => unknown): Promise<unknown> {
     let last = 'no url';
+    let lastRange: RpcError | null = null;
+    let lastPermanent: RpcError | null = null;
     for (let round = 0; round < this.rounds; round++) {
+      let transient = false;
       for (let k = 0; k < this.urls.length; k++) {
         const idx = (this.pref + k) % this.urls.length;
         const url = this.urls[idx] as string;
+        if (this.dead.has(url)) continue;
         for (let attempt = 0; attempt < this.attempts; attempt++) {
           try {
             const out = parse(await this.post(url, make()));
             this.pref = idx;
             return out;
           } catch (e) {
-            if (e instanceof RpcError) {
-              if (isRangeError(e) && !RATE_RE.test(e.message)) throw e; // caller shrinks the range
-              if (!RATE_RE.test(e.message)) {
-                last = e.message;
-                break; // this url cannot answer (no archive access, method or batch not supported): next url
-              }
+            const msg = e instanceof Error ? e.message : String(e);
+            if (/HTTP 40[13]|unauthorized|api key|personal token/i.test(msg)) {
+              this.dead.add(url); // needs a key: never works here
+              last = msg;
+              break;
             }
-            last = e instanceof Error ? e.message : String(e);
-            await this.sleep(Math.min(20_000, 500 * 2 ** attempt) + Math.floor(Math.random() * 250));
+            if (e instanceof RpcError && !RATE_RE.test(msg)) {
+              // This url cannot answer this call (range too wide, no archive access, no batch support): try the next one.
+              if (isRangeError(e)) lastRange = e;
+              else lastPermanent = e;
+              break;
+            }
+            transient = true;
+            last = msg;
+            await this.sleep(Math.min(30_000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 250));
           }
         }
       }
+      if (!transient && (lastRange || lastPermanent)) throw lastRange ?? lastPermanent;
     }
+    if (lastRange) throw lastRange;
     throw new RpcError(undefined, `all RPC urls failed: ${last}`);
   }
 

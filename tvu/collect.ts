@@ -29,6 +29,7 @@ export interface RunOpts {
   publish: boolean;
   chains?: ChainCfg[];
   saveEveryMs?: number;
+  scanPauseMs?: number;
 }
 
 export interface RunResult {
@@ -59,17 +60,28 @@ export async function run(o: RunOpts, d: Deps): Promise<RunResult> {
       const s = states[c.key] as ChainState;
       const start = Math.min(c.umbraStart, c.announcerStart);
       const before = s.lastBlock;
-      complete[c.key] = await scanChain(rpcs[c.key]!, s, {
-        start,
-        head: heads[c.key]!,
-        stop: () => d.now() > deadline,
-        onProgress: () => {
-          if (d.now() - lastSave > (o.saveEveryMs ?? 300_000)) {
-            lastSave = d.now();
-            save();
-          }
-        },
-      });
+      let lastLog = 0;
+      try {
+        complete[c.key] = await scanChain(rpcs[c.key]!, s, {
+          start,
+          pauseMs: o.scanPauseMs,
+          head: heads[c.key]!,
+          stop: () => d.now() > deadline,
+          onProgress: () => {
+            if (d.now() - lastSave > (o.saveEveryMs ?? 300_000)) {
+              lastSave = d.now();
+              save();
+            }
+            if (d.now() - lastLog > 120_000) {
+              lastLog = d.now();
+              d.log(`${c.key}: progress block ${s.lastBlock} of ${heads[c.key]}, span ${s.span}, ${s.addresses.size} addresses`);
+            }
+          },
+        });
+      } catch (e) {
+        complete[c.key] = false;
+        d.log(`${c.key}: scan stopped by an error at block ${s.lastBlock}: ${e instanceof Error ? e.message : String(e)}`);
+      }
       d.log(`${c.key}: scanned to block ${s.lastBlock} of ${heads[c.key]} (${before === 0 ? 'fresh' : 'resumed from ' + before}), ${s.addresses.size} addresses, complete=${complete[c.key]}`);
     }),
   );
@@ -141,7 +153,7 @@ async function main(): Promise<void> {
   const budgetMin = Number(arg('--budget-minutes', '300'));
   const publish = !args.includes('--no-publish');
   const res = await run(
-    { dataDir, budgetMs: budgetMin * 60_000, publish },
+    { dataDir, budgetMs: budgetMin * 60_000, publish, scanPauseMs: 150 },
     {
       async makeRpc(c) {
         const r = new FallbackRpc(rpcUrls(c));

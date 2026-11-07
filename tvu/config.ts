@@ -79,13 +79,7 @@ export const CHAINS: ChainCfg[] = [
     native: 'eth',
     umbraStart: 12_343_914,
     announcerStart: 20_042_207,
-    rpcs: [
-      'https://ethereum-rpc.publicnode.com',
-      'https://eth.llamarpc.com',
-      'https://rpc.ankr.com/eth',
-      'https://1rpc.io/eth',
-      'https://eth.drpc.org',
-    ],
+    rpcs: ['https://eth.blockscout.com/api/eth-rpc', 'https://ethereum-rpc.publicnode.com', 'https://eth.drpc.org'],
     tokens: [
       t('USDC', '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', 6),
       t('USDT', '0xdAC17F958D2ee523a2206206994597C13D831ec7', 6),
@@ -99,13 +93,7 @@ export const CHAINS: ChainCfg[] = [
     native: 'eth',
     umbraStart: 7_285_883,
     announcerStart: 7_285_883,
-    rpcs: [
-      'https://arbitrum-one-rpc.publicnode.com',
-      'https://arb1.arbitrum.io/rpc',
-      'https://rpc.ankr.com/arbitrum',
-      'https://1rpc.io/arb',
-      'https://arbitrum.drpc.org',
-    ],
+    rpcs: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum-one-rpc.publicnode.com', 'https://arbitrum.drpc.org'],
     tokens: [
       t('USDC', '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', 6),
       t('USDC.e', '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8', 6, 'usd', 'USDC'),
@@ -120,13 +108,7 @@ export const CHAINS: ChainCfg[] = [
     native: 'eth',
     umbraStart: 4_069_556,
     announcerStart: 4_069_556,
-    rpcs: [
-      'https://optimism-rpc.publicnode.com',
-      'https://mainnet.optimism.io',
-      'https://rpc.ankr.com/optimism',
-      'https://1rpc.io/op',
-      'https://optimism.drpc.org',
-    ],
+    rpcs: ['https://mainnet.optimism.io', 'https://optimism-rpc.publicnode.com', 'https://optimism.drpc.org'],
     tokens: [
       t('USDC', '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85', 6),
       t('USDC.e', '0x7F5c764cBc14f9669B88837ca1490cCa17c31607', 6, 'usd', 'USDC'),
@@ -141,13 +123,7 @@ export const CHAINS: ChainCfg[] = [
     native: 'pol',
     umbraStart: 20_750_142,
     announcerStart: 20_750_142,
-    rpcs: [
-      'https://polygon-bor-rpc.publicnode.com',
-      'https://polygon-rpc.com',
-      'https://rpc.ankr.com/polygon',
-      'https://1rpc.io/matic',
-      'https://polygon.drpc.org',
-    ],
+    rpcs: ['https://polygon-bor-rpc.publicnode.com', 'https://polygon.drpc.org', 'https://polygon-rpc.com'],
     tokens: [
       t('USDC', '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', 6),
       t('USDC.e', '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174', 6, 'usd', 'USDC'),
@@ -162,13 +138,7 @@ export const CHAINS: ChainCfg[] = [
     native: 'eth',
     umbraStart: 10_761_374,
     announcerStart: 10_761_374,
-    rpcs: [
-      'https://base-rpc.publicnode.com',
-      'https://mainnet.base.org',
-      'https://rpc.ankr.com/base',
-      'https://1rpc.io/base',
-      'https://base.drpc.org',
-    ],
+    rpcs: ['https://base-rpc.publicnode.com', 'https://mainnet.base.org', 'https://base.drpc.org'],
     tokens: [
       t('USDC', '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', 6),
       t('USDbC', '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA', 6, 'usd', 'USD'),
@@ -183,13 +153,7 @@ export const CHAINS: ChainCfg[] = [
     native: 'usd',
     umbraStart: 28_237_950,
     announcerStart: 28_237_950,
-    rpcs: [
-      'https://gnosis-rpc.publicnode.com',
-      'https://rpc.gnosischain.com',
-      'https://rpc.ankr.com/gnosis',
-      'https://1rpc.io/gnosis',
-      'https://gnosis.drpc.org',
-    ],
+    rpcs: ['https://rpc.gnosischain.com', 'https://gnosis-rpc.publicnode.com', 'https://gnosis.drpc.org'],
     tokens: [
       t('USDC', '0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83', 6),
       t('USDT', '0x4ECaBa5870353805a9F068101A40E0f32ed605C6', 6, 'usd', 'USD'),
@@ -199,6 +163,9 @@ export const CHAINS: ChainCfg[] = [
   },
 ];
 
+// Public endpoint notes from a probe run on GitHub Actions (7 Nov 2026): most free endpoints refuse old or wide
+// eth_getLogs (publicnode needs a token for archive reads, drpc allows 10,000 blocks, others return 403 or 429), so the
+// list is short. Set RPC_<CHAIN> to a keyed endpoint to make the first scan much faster.
 /** RPC_ETHEREUM etc. (comma separated) are tried before the built in public endpoints. */
 export function rpcUrls(c: ChainCfg, env: Record<string, string | undefined> = process.env): string[] {
   const extra = (env[`RPC_${c.key.toUpperCase()}`] ?? '')
