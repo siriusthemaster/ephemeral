@@ -16,7 +16,7 @@ afterEach(() => {
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 // The node, injected: no token transfer from any of the addresses on chain.
-const noTokenLogs: TokenLogCheck = { node: { blockNumber: async () => 100n, getLogs: async () => [] }, fromBlock: 0n };
+const noTokenLogs: TokenLogCheck = { node: { blockNumber: async () => 100n, getLogs: async () => [], getCode: async () => '0x' }, fromBlock: 0n };
 const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const topic = (a: string) => `0x${'0'.repeat(24)}${a.slice(2).toLowerCase()}`;
 /** Calldata of transfer(to, amount): how a stealth address sends its own tokens (the explorer's raw_input). */
@@ -137,6 +137,7 @@ test('loader: tx count matches, but a relayed token transfer is on chain and not
   const tokenLogs: TokenLogCheck = {
     node: {
       blockNumber: async () => 25_999n,
+      getCode: async () => '0x',
       getLogs: async (q) => {
         calls.push(q);
         if (q.topics[0] !== TRANSFER) return []; // a truthful node: no ERC-1155 logs here
@@ -184,7 +185,7 @@ test('loader: token transfer in an indexed transaction but not indexed itself; o
     if (u.includes('/token-transfers')) return json({ items, next_page_params: null });
     return json({ items: [], next_page_params: null });
   }) as typeof fetch;
-  const tokenLogs: TokenLogCheck = { node: { blockNumber: async () => 50n, getLogs: async () => [transferLog(A, 31, S1, X)] }, fromBlock: 0n };
+  const tokenLogs: TokenLogCheck = { node: { blockNumber: async () => 50n, getLogs: async () => [transferLog(A, 31, S1, X)], getCode: async () => '0x' }, fromBlock: 0n };
   const nonce = { [S1.toLowerCase()]: 1 };
   assert.equal((await loadWithdrawalHistory(net, [S1], undefined, nonce, tokenLogs)).ok, false, 'transaction indexed, its transfer not yet');
   items = [{ tx_hash: A, log_index: '31', from: { hash: S1 }, to: { hash: X } }]; // older Blockscout: tx_hash, string index
@@ -201,6 +202,7 @@ test('loader: a node that refuses large ranges gets smaller ones; no node, or an
   const picky: TokenLogCheck = {
     node: {
       blockNumber: async () => 20_000n,
+      getCode: async () => '0x',
       getLogs: async (q) => {
         if (q.toBlock - q.fromBlock + 1n > 4_000n) throw new Error('block range too large');
         if (q.topics[0] === TRANSFER) ranges.push([q.fromBlock, q.toBlock]);
@@ -218,9 +220,9 @@ test('loader: a node that refuses large ranges gets smaller ones; no node, or an
   }
 
   assert.equal((await loadWithdrawalHistory(net, [S1])).ok, false, 'no node: token transfers cannot be confirmed');
-  const down: TokenLogCheck = { node: { blockNumber: async () => 100n, getLogs: async () => Promise.reject(new Error('down')) }, fromBlock: 0n };
+  const down: TokenLogCheck = { node: { blockNumber: async () => 100n, getLogs: async () => Promise.reject(new Error('down')), getCode: async () => '0x' }, fromBlock: 0n };
   assert.equal((await loadWithdrawalHistory(net, [S1], undefined, { [S1]: 0 }, down)).ok, false, 'logs unreadable');
-  const noHead: TokenLogCheck = { node: { blockNumber: async () => Promise.reject(new Error('down')), getLogs: async () => [] }, fromBlock: 0n };
+  const noHead: TokenLogCheck = { node: { blockNumber: async () => Promise.reject(new Error('down')), getLogs: async () => [], getCode: async () => '0x' }, fromBlock: 0n };
   assert.equal((await loadWithdrawalHistory(net, [S1], undefined, { [S1]: 0 }, noHead)).ok, false, 'head unreadable');
 });
 

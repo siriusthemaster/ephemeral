@@ -38,6 +38,8 @@ export interface Decoded {
   skipped: number;
   /** ERC-5564 announcements under another scheme than 1 (secp256k1 with view tags): not stealth payments we can read */
   otherScheme: number;
+  /** Umbra announcements of an amount of zero: nothing moved, not a payment (bug bounty 3 Nov) */
+  zeroAmount: number;
 }
 
 /**
@@ -57,18 +59,24 @@ export function decodeLogs(
   logs: readonly RawLog[],
   addrs: { umbra: string; umbraRegistry: string; announcer: string; registry6538: string },
 ): Decoded {
-  const out: Decoded = { payments: [], tokenWithdrawals: [], registrations: [], skipped: 0, otherScheme: 0 };
+  const out: Decoded = { payments: [], tokenWithdrawals: [], registrations: [], skipped: 0, otherScheme: 0, zeroAmount: 0 };
   for (const log of logs) {
-    const address = lc(log.address);
-    const topic0 = lc(log.topics[0] ?? '');
-    const txHash = lc(log.transactionHash);
-    const blockNumber = hexToNumber(log.blockNumber);
-    const blockTimestamp = log.blockTimestamp ? hexToNumber(log.blockTimestamp) : undefined;
-    const topics = log.topics as [Hex, ...Hex[]];
-    const data = log.data as Hex;
     try {
+      // the envelope is read inside the guard too: one malformed field skips that log, not the whole decode (bug
+      // bounty 3 Nov)
+      const address = lc(log.address);
+      const topic0 = lc(log.topics[0] ?? '');
+      const txHash = lc(log.transactionHash);
+      const blockNumber = hexToNumber(log.blockNumber);
+      const blockTimestamp = log.blockTimestamp ? hexToNumber(log.blockTimestamp) : undefined;
+      const topics = log.topics as [Hex, ...Hex[]];
+      const data = log.data as Hex;
       if (address === addrs.umbra && topic0 === TOPICS.umbraAnnouncement) {
         const { args } = decodeEventLog({ abi: [EVENTS.umbraAnnouncement], data, topics });
+        if (args.amount === 0n) {
+          out.zeroAmount++; // the Umbra contract accepts a send of zero: an announcement with nothing behind it
+          continue;
+        }
         const isEth = lc(args.token) === ETH_PLACEHOLDER;
         out.payments.push({
           source: 'umbra',

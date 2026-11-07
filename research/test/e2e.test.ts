@@ -203,6 +203,7 @@ test('full scan reproduces the fixture numbers', async () => {
     announcementAssetMismatch: 0,
     announcementTokenDust: 0,
     otherSchemeAnnouncements: 0,
+    zeroAmountUmbraAnnouncements: 0,
   });
   assert.ok(rangeErrors > 0, 'range limit was exercised');
   assert.ok(s.rpc.retries > 0, '429 was retried');

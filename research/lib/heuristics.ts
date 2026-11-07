@@ -126,6 +126,9 @@ interface StealthView {
    *  leave only through TokenWithdrawal, so a direct transfer of the same token is not that payment leaving. */
   directTokens: Set<string>;
   paymentTxs: Set<string>;
+  /** first payment block of each paid asset ('eth' or the token contract): an asset that left before its own payment
+   *  arrived is not that payment leaving (bug bounty 3 Nov) */
+  firstOf: Map<string, number>;
   assets: Set<Asset>;
   primary: Asset;
   /** accepted withdrawals, in scope */
@@ -146,16 +149,23 @@ function primaryAsset(assets: Set<Asset>): Asset {
  *  stealth address moves other tokens and must not break single-withdrawal status. An address whose only payments
  *  have an unknown asset counts any exit. */
 function isPrimary(w: Withdrawal, v: StealthView): boolean {
-  if (w.kind === 'eth') return v.assets.has('ETH') || onlyUnknown(v);
-  if (w.token !== null && v.tokens.has(w.token)) return w.kind === 'umbra-token' || v.directTokens.has(w.token);
+  if (w.kind === 'eth') return (v.assets.has('ETH') && afterPaid(w, v, 'eth')) || onlyUnknown(v);
+  if (w.token !== null && v.tokens.has(w.token))
+    return (w.kind === 'umbra-token' || v.directTokens.has(w.token)) && afterPaid(w, v, w.token);
   return onlyUnknown(v);
 }
+/** The withdrawal comes after the first payment of that asset (bug bounty 3 Nov: a token relayed out before its own
+ *  payment arrived counted as that payment's withdrawal). */
+const afterPaid = (w: Withdrawal, v: StealthView, key: string): boolean => w.block > (v.firstOf.get(key) ?? v.firstBlock);
 const onlyUnknown = (v: StealthView): boolean => v.assets.size === 1 && v.assets.has('UNKNOWN');
 
 /** Any asset that was paid in left. An unknown asset (metadata with an unknown selector) cannot be ruled out. */
 function isPaidAsset(w: Withdrawal, v: StealthView): boolean {
   if (v.assets.has('UNKNOWN')) return true;
-  return w.kind === 'eth' ? v.assets.has('ETH') : w.token !== null && v.tokens.has(w.token);
+  if (w.kind === 'eth') return v.assets.has('ETH') && afterPaid(w, v, 'eth');
+  // the same rule as isPrimary: for a token paid through Umbra only its TokenWithdrawal moves the paid tokens, so a
+  // direct transfer of that token to the payer is no round trip (bug bounty 3 Nov, H2-any)
+  return w.token !== null && v.tokens.has(w.token) && (w.kind === 'umbra-token' || v.directTokens.has(w.token)) && afterPaid(w, v, w.token);
 }
 
 /** Group payments per stealth address and keep only withdrawals the owner actually made after being paid. */
@@ -182,6 +192,11 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
     if (scope.firstBefore !== undefined && firstBlock >= scope.firstBefore) continue;
     const first = ps.find((p) => p.block === firstBlock) as Payment;
     const assets = new Set(ps.map((p) => p.asset));
+    const firstOf = new Map<string, number>();
+    for (const p of ps) {
+      const key = p.asset === 'ETH' ? 'eth' : p.token;
+      if (key !== null && p.asset !== 'UNKNOWN') firstOf.set(key, Math.min(p.block, firstOf.get(key) ?? Infinity));
+    }
     const v: StealthView = {
       addr,
       firstBlock,
@@ -190,6 +205,7 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
       tokens: new Set(ps.map((p) => p.token).filter((t): t is string => t !== null)),
       directTokens: new Set(ps.filter((p) => p.source !== 'umbra').map((p) => p.token).filter((t): t is string => t !== null)),
       paymentTxs: new Set(ps.map((p) => p.txHash)),
+      firstOf,
       assets,
       primary: primaryAsset(assets),
       accepted: [],
@@ -199,6 +215,9 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
       // Not before the first payment, and not in its block: the scan has no transaction order inside a block, so a
       // transaction placed before the payment there would count as a withdrawal from a fresh address (F39, 30 Oct).
       if (v.paymentTxs.has(w.txHash) || w.block <= firstBlock) continue;
+      // a transfer to itself moves nothing out (bug bounty 3 Nov: a self-transfer counted as a withdrawal and, for a
+      // self-funded address, as an H2 round trip)
+      if (w.to === addr) continue;
       if (scope.asOfBlock !== undefined && w.block >= scope.asOfBlock) continue;
       // Count only what the owner did: signed by the stealth address, an Umbra token withdrawal,
       // a relayed move of the very token that was paid in, or ETH leaving a smart-account stealth address.
@@ -282,6 +301,8 @@ function measure(ds: Dataset, scope: Scope, only?: (v: StealthView) => boolean):
     // with a token payment counts, also one paid ETH too (F34): a payer's ETH is a payment, not a funding.
     let h5 = false;
     const selfBlocks = v.accepted.filter((w) => w.txFrom === v.addr).map((w) => w.block);
+    // ETH that arrives inside one of its own transactions cannot have paid that transaction's gas (bug bounty 3 Nov)
+    const selfTxs = new Set(v.accepted.filter((w) => w.txFrom === v.addr).map((w) => w.txHash));
     if (v.assets.has('TOKEN') && selfBlocks.length > 0) {
       m.needingOwnGas++;
       const firstSelf = Math.min(...selfBlocks);
@@ -291,6 +312,7 @@ function measure(ds: Dataset, scope: Scope, only?: (v: StealthView) => boolean):
           f.block <= firstSelf &&
           (scope.asOfBlock === undefined || f.block < scope.asOfBlock) &&
           !v.paymentTxs.has(f.txHash) &&
+          !selfTxs.has(f.txHash) &&
           f.from !== v.addr &&
           !v.senders.has(f.from) && // the payer topping up gas reveals nothing new
           !ds.contracts.has(f.from) && // routers, bridges, exchanges' hot contracts
@@ -304,6 +326,17 @@ function measure(ds: Dataset, scope: Scope, only?: (v: StealthView) => boolean):
   m.identityPct = pct(m.identityLinked, m.withdrawn);
   return m;
 }
+
+/** Destinations nobody can spend from: the zero address, 0x…dEaD, the precompiles 0x…01 to 0x…11 and 0x…0100
+ *  (P256VERIFY), and the EIP-4788/7708 system address. Lower case. */
+const SINKS = new Set<string>([
+  '0x0000000000000000000000000000000000000000',
+  '0x000000000000000000000000000000000000dead',
+  '0x0000000000000000000000000000000000000100',
+  '0xfffffffffffffffffffffffffffffffffffffffe',
+  ...Array.from({ length: 0x11 }, (_, i) => `0x${'0'.repeat(38)}${(i + 1).toString(16).padStart(2, '0')}`),
+]);
+const isSink = (a: string): boolean => SINKS.has(a);
 
 const ALL_SOURCES = new Set<Payment['source']>(['umbra', 'erc5564']);
 const ALL_REGISTRIES = new Set<Registration['registry']>(['umbra', 'erc6538']);
@@ -338,7 +371,9 @@ export function analyze(ds: Dataset, opts: AnalyzeOptions): Analysis {
     const dests = new Set(v.accepted.filter((w) => w.txHash === tx && isPrimary(w, v)).map((w) => w.to));
     if (dests.size !== 1) continue;
     const d = [...dests][0] as string;
-    if (ds.contracts.has(d) || d === v.addr) continue;
+    // a sink nobody owns (zero, 0x…dEaD, a precompile, the system address) collects nothing: two strangers burning
+    // there are not one collector (bug bounty 3 Nov)
+    if (ds.contracts.has(d) || d === v.addr || isSink(d)) continue;
     groups.set(d, (groups.get(d) ?? 0) + 1);
   }
   let clusteredStealth = 0;
