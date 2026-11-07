@@ -166,3 +166,37 @@ test('rpc falls over to the next url and reports range errors', async () => {
   const r2 = new FallbackRpc(['c'], { fetchImpl: f, sleep });
   await assert.rejects(r2.call('eth_getLogs', []), (e: unknown) => e instanceof RpcError && e.code === -32005);
 });
+
+test('rpc: a url with a small range limit falls through to the next one, all limited means a range error', async () => {
+  const hits: string[] = [];
+  const f = (async (url: string, init: { body: string }) => {
+    hits.push(url);
+    const id = JSON.parse(init.body).id;
+    if (url === 'small' || url === 'small2') return { status: 200, text: async () => JSON.stringify({ id, error: { code: -32000, message: 'ranges over 10000 blocks are not supported' } }) };
+    return { status: 200, text: async () => JSON.stringify({ id, result: 'big' }) };
+  }) as never;
+  const sleep = async () => {};
+  const r = new FallbackRpc(['small', 'big'], { fetchImpl: f, sleep });
+  assert.equal(await r.call('eth_getLogs', []), 'big');
+  hits.length = 0;
+  assert.equal(await r.call('eth_getLogs', []), 'big');
+  assert.equal(hits[0], 'big'); // the url that worked is tried first
+  const all = new FallbackRpc(['small', 'small2'], { fetchImpl: f, sleep });
+  await assert.rejects(all.call('eth_getLogs', []), (e: unknown) => e instanceof RpcError && /ranges over/.test(e.message));
+});
+
+test('rpc: a url that needs a key is marked dead and not tried again', async () => {
+  let keyed = 0;
+  const f = (async (url: string, init: { body: string }) => {
+    const id = JSON.parse(init.body).id;
+    if (url === 'keyed') {
+      keyed++;
+      return { status: 200, text: async () => JSON.stringify({ id, error: { code: -32000, message: 'Archive requests require a personal token' } }) };
+    }
+    return { status: 200, text: async () => JSON.stringify({ id, result: 'ok' }) };
+  }) as never;
+  const r = new FallbackRpc(['keyed', 'free'], { fetchImpl: f, sleep: async () => {} });
+  await r.call('eth_getLogs', []);
+  await r.call('eth_getLogs', []);
+  assert.equal(keyed, 1);
+});

@@ -77,7 +77,7 @@ jobs:
       - name: Collect (no publish)
         run: |
           set -o pipefail
-          node --import tsx tvu/collect.ts --data data --budget-minutes 8 --no-publish | tee data/run.log
+          node --import tsx tvu/collect.ts --data data --budget-minutes 25 --no-publish | tee data/run.log
       - name: Summary
         if: always()
         run: |

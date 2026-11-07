@@ -41,6 +41,8 @@ export interface ScanOpts {
   stop?: () => boolean;
   /** Called after every completed range. */
   onProgress?: (s: ChainState) => void;
+  /** Called when a range was refused, with the node's message. */
+  onRangeError?: (message: string, span: number) => void;
 }
 
 const hex = (n: number): string => '0x' + n.toString(16);
@@ -54,13 +56,16 @@ export async function scanChain(rpc: Rpc, s: ChainState, o: ScanOpts): Promise<b
     if (o.pauseMs) await new Promise((r) => setTimeout(r, o.pauseMs));
     const span = Math.max(1, Math.min(s.span, maxSpan));
     const to = Math.min(o.head, from + span - 1);
-    let logs: RawLog[];
+    let logs: RawLog[] = [];
     try {
-      logs = await rpc.call<RawLog[]>('eth_getLogs', [
-        { fromBlock: hex(from), toBlock: hex(to), address: [UMBRA, ANNOUNCER], topics: [[UMBRA_TOPIC0, ANNOUNCER_TOPIC0]] },
-      ]);
+      // One call per contract: the OR form of the topic filter is not accepted by every public node.
+      for (const [address, topic0] of [[UMBRA, UMBRA_TOPIC0], [ANNOUNCER, ANNOUNCER_TOPIC0]] as const) {
+        const part = await rpc.call<RawLog[]>('eth_getLogs', [{ fromBlock: hex(from), toBlock: hex(to), address, topics: [topic0] }]);
+        logs = logs.concat(part);
+      }
     } catch (e) {
       if (isRangeError(e) && span > 1) {
+        o.onRangeError?.(e instanceof Error ? e.message : String(e), span);
         s.span = Math.max(1, Math.floor(span / 2));
         continue;
       }

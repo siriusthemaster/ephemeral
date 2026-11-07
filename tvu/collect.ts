@@ -61,12 +61,20 @@ export async function run(o: RunOpts, d: Deps): Promise<RunResult> {
       const start = Math.min(c.umbraStart, c.announcerStart);
       const before = s.lastBlock;
       let lastLog = 0;
+      const seenMsgs = new Set<string>();
       try {
         complete[c.key] = await scanChain(rpcs[c.key]!, s, {
           start,
           pauseMs: o.scanPauseMs,
           head: heads[c.key]!,
           stop: () => d.now() > deadline,
+          onRangeError: (m, span) => {
+            const key = m.slice(0, 80);
+            if (seenMsgs.size < 6 && !seenMsgs.has(key)) {
+              seenMsgs.add(key);
+              d.log(`${c.key}: range of ${span} blocks refused: ${m.slice(0, 200)}`);
+            }
+          },
           onProgress: () => {
             if (d.now() - lastSave > (o.saveEveryMs ?? 300_000)) {
               lastSave = d.now();
