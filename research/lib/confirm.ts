@@ -17,13 +17,18 @@
  * The payment transaction (its sender is the payer for H2) is the transaction that moved the value.
  *
  * A stranger can also send a token to the address (bug bounty N14, 3 Nov), and announce it (bug bounty 4 and 5 Nov:
- * the Announcer is permissionless, so another announcement's claim proves nothing). A token is bound to the
- * announcement being confirmed only when it arrived in the same transaction as that announcement, in the same
- * transaction as ETH that arrived (a gas tip, StealthBuy), or when this announcement itself names that exact token;
- * when its metadata names no token, also when the token came from the sender of arrived ETH (one payer sent the
- * token and its gas). Bound tokens are the payment. Otherwise arrived ETH is the payment, whatever the metadata says (ETH, a token, a
- * selector without a token, or too short to read), and the unbound tokens are counted in `tokenDust`. Only when no
- * ETH arrived do unbound tokens stay the payment (a stranger's ETH claim cannot hide a token-paid address, 24 Oct).
+ * the Announcer is permissionless, so another announcement's claim proves nothing). The payer of an announcement is
+ * the signer of the transaction that carries it (`senderOf`); who a transfer log says sent a token proves nothing
+ * (a fake token logs any `from`), and neither does a stranger's wei (bug bounty 6 Nov, four bypasses). A token is
+ * bound to the announcement being confirmed only when it arrived in the same transaction as that announcement, in a
+ * transaction the payer signed that also carried ETH (a gas tip, StealthBuy), or when this announcement itself names
+ * that exact token; when its metadata names no token, also when the payer signed the transaction that moved the
+ * token (one payer sent the token and its gas). Bound tokens are the payment. Otherwise ETH the payer sent is the
+ * payment, whatever the metadata says (ETH, a token, a selector without a token, or too short to read), and the
+ * unbound tokens are counted in `tokenDust`. Only when the payer sent no ETH do unbound tokens stay the payment (a
+ * stranger's ETH, claim or wei, cannot hide a token-paid address, 24 Oct, 6 Nov). Without the signer of the
+ * announcement's transaction (scan.ts always has it) only the announcement's own transaction binds a token and any
+ * arrived ETH is the payment, as before.
  * Every announcement is confirmed on its own: a griefer's announcement with its own dust becomes the griefer's own
  * small payment, never a change to the real one. Only ERC-5564 scheme 1 (secp256k1 with view tags) is read
  * (decode.ts).
@@ -52,48 +57,76 @@ export interface Confirmed {
   tokenDust: number;
 }
 
-export function confirmPayments(
-  logs: readonly PaymentLog[],
-  incoming: (stealth: string) => readonly TransferLite[] | undefined,
-): Confirmed {
-  const payments: PaymentLog[] = [];
-  const seen = new Set<string>();
-  let unfunded = 0;
-  let assetMismatch = 0;
-  let tokenDust = 0;
+/** the signer (`from`) of a transaction, lower case; undefined when unknown */
+export type SenderOf = (txHash: string) => string | undefined;
+
+type Incoming = (stealth: string) => readonly TransferLite[] | undefined;
+
+function windowFor(logs: readonly PaymentLog[]): (p: PaymentLog, incoming: Incoming) => TransferLite[] {
   const firstAnnounced = new Map<string, number>();
   for (const p of logs) {
     if (p.source === 'erc5564') firstAnnounced.set(p.stealth, Math.min(p.blockNumber, firstAnnounced.get(p.stealth) ?? Infinity));
   }
-  for (const p of logs) {
-    if (p.source !== 'erc5564') {
-      payments.push(p);
-      continue;
-    }
+  return (p, incoming) => {
     const before = p.blockNumber === firstAnnounced.get(p.stealth) ? WINDOW_BEFORE_FIRST : WINDOW_BEFORE;
-    const arrived = (incoming(p.stealth) ?? []).filter(
+    return (incoming(p.stealth) ?? []).filter(
       (t) =>
         t.to === p.stealth &&
         t.from !== p.stealth &&
         t.block >= p.blockNumber - before &&
         t.block <= p.blockNumber + WINDOW_AFTER,
     );
+  };
+}
+
+/** Transactions whose signer confirmPayments needs: each ERC-5564 announcement's own, and the arrivals next to it
+ *  when a token arrived (the only case where binding decides anything). */
+export function neededTxs(logs: readonly PaymentLog[], incoming: Incoming): string[] {
+  const arrivedFor = windowFor(logs);
+  const out = new Set<string>();
+  for (const p of logs) {
+    if (p.source !== 'erc5564') continue;
+    out.add(p.txHash);
+    const arrived = arrivedFor(p, incoming);
+    if (arrived.some((t) => !ETH_CATEGORIES.has(t.category) && t.token !== null)) for (const t of arrived) out.add(t.hash);
+  }
+  return [...out];
+}
+
+export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming, senderOf: SenderOf = () => undefined): Confirmed {
+  const payments: PaymentLog[] = [];
+  const seen = new Set<string>();
+  let unfunded = 0;
+  let assetMismatch = 0;
+  let tokenDust = 0;
+  const arrivedFor = windowFor(logs);
+  for (const p of logs) {
+    if (p.source !== 'erc5564') {
+      payments.push(p);
+      continue;
+    }
+    const arrived = arrivedFor(p, incoming);
     const allTokens = arrived.filter((t) => !ETH_CATEGORIES.has(t.category) && t.token !== null);
     const eth = arrived.filter((t) => ETH_CATEGORIES.has(t.category));
     // Metadata that names no token (too short, an unknown selector, or a token selector without the token) cannot
     // bind a token by name; there a token sent by the same sender as arrived ETH is the payment and the ETH its gas.
     const namesNoToken = p.asset === 'UNKNOWN' || (p.asset === 'TOKEN' && p.token === null);
+    // The payer signed the announcement's transaction. A log's `from` is not evidence (any token contract can log
+    // any `from`), and a stranger can put wei and dust in one transaction: only transaction signers count.
+    const payer = senderOf(p.txHash);
+    const byPayer = (hash: string): boolean => hash === p.txHash || (payer !== undefined && senderOf(hash) === payer);
+    const payerEth = eth.filter((e) => byPayer(e.hash));
     const bound = allTokens.filter(
       (t) =>
         t.hash === p.txHash ||
-        eth.some((e) => e.hash === t.hash) ||
+        payerEth.some((e) => e.hash === t.hash) ||
         (p.asset === 'TOKEN' && p.token !== null && t.token === p.token) ||
-        (namesNoToken && eth.some((e) => e.from === t.from)),
+        (namesNoToken && byPayer(t.hash)),
     );
     let tokens: TransferLite[];
     if (bound.length > 0) tokens = bound;
-    else if (eth.length > 0) tokens = [];
-    else tokens = allTokens; // nothing but tokens arrived: they are what was paid
+    else if (payer === undefined ? eth.length > 0 : payerEth.length > 0) tokens = []; // unknown payer: any ETH, as before 6 Nov
+    else tokens = allTokens; // the payer sent no ETH: the tokens are what was paid
     if (tokens.length < allTokens.length) tokenDust++;
     const asset = tokens.length > 0 ? 'TOKEN' : eth.length > 0 ? 'ETH' : null;
     if (asset === null) {

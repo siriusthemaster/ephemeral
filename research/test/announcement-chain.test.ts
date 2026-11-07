@@ -76,6 +76,14 @@ const world = (payments: Payment[], withdrawals: Withdrawal[], fundings: Funding
 });
 const byStealth = (transfers: TransferLite[]) => (s: string) => transfers.filter((t) => t.to === s);
 
+/** confirmPayments as scan.ts calls it: the signer of a transaction is the `from` of the transfer that carries it
+ *  (the fixtures use the sender as the signer); an announcement's transaction is the payer's unless a transfer says otherwise. */
+function confirmTx(logs: readonly PaymentLog[], incoming: (s: string) => readonly TransferLite[] | undefined) {
+  const all = new Map<string, string>();
+  for (const l of logs) for (const t of incoming(l.stealth) ?? []) if (!all.has(t.hash)) all.set(t.hash, t.from);
+  return confirmPayments(logs, incoming, (hash) => all.get(hash) ?? P);
+}
+
 test('Fenzy 28 Oct: safeBatchTransferFrom (0x2eb2c2d6) in metadata is a token payment, not unknown', () => {
   const token = a(0x1155);
   const r = parseMetadata('0x99' + '2eb2c2d6' + token.slice(2) + '00'.repeat(32));
@@ -85,7 +93,7 @@ test('Fenzy 28 Oct: safeBatchTransferFrom (0x2eb2c2d6) in metadata is a token pa
 });
 
 test('an announcement with nothing arriving next to it is not a payment', () => {
-  const r = confirmPayments([ann(S(1), 'ETH', null, 1)], () => []);
+  const r = confirmTx([ann(S(1), 'ETH', null, 1)], () => []);
   assert.deepEqual(r.payments, []);
   assert.equal(r.unfunded, 1);
   // so the address is not counted at all, even after a withdrawal from it
@@ -105,7 +113,7 @@ test("Swaplane / One Cursor 24 Oct: a stranger's ETH announcement does not hide 
   const before = analyze(world(toPayments(logs, senders), withdrawals), opts).all;
   assert.equal(before.withdrawn, 1);
 
-  const r = confirmPayments(logs, byStealth(transfers));
+  const r = confirmTx(logs, byStealth(transfers));
   assert.equal(r.unfunded, 1, 'the ETH claim moved nothing');
   assert.deepEqual(r.payments.map((p) => [p.asset, p.token]), [['TOKEN', TA]]);
   const after = analyze(world(toPayments(r.payments, senders), withdrawals), opts).all;
@@ -127,7 +135,7 @@ test("a stranger's ETH announcement does not hide H5 either (token-only address,
   // H5 looks at every address with a token payment, so even the raw announcements keep it (F34)
   const before = analyze(world(toPayments(logs, senders), withdrawals, fundings, registrations), opts).all;
   assert.equal(before.h5, 1);
-  const r = confirmPayments(logs, byStealth(transfers));
+  const r = confirmTx(logs, byStealth(transfers));
   const after = analyze(world(toPayments(r.payments, senders), withdrawals, fundings, registrations), opts).all;
   assert.equal(after.needingOwnGas, 1);
   assert.equal(after.h5, 1);
@@ -137,11 +145,11 @@ test("a stranger's ETH announcement does not hide H5 either (token-only address,
 test('the asset is what arrived: ETH sent with a token is gas, a wrong metadata claim is counted', () => {
   const tip = arrive(S(3), 5, C + 1_000, null);
   const tok = arrive(S(3), 5, C + 1_000, TA);
-  const r = confirmPayments([ann(S(3), 'ETH', null, 5)], byStealth([tip, tok]));
+  const r = confirmTx([ann(S(3), 'ETH', null, 5)], byStealth([tip, tok]));
   assert.deepEqual(r.payments.map((p) => [p.asset, p.token, p.txHash]), [['TOKEN', TA, h(5)]]);
   assert.equal(r.assetMismatch, 1);
   // unknown metadata (short or unlisted selector) is no mismatch: the chain names the asset
-  const u = confirmPayments([ann(S(3), 'UNKNOWN', null, 5)], byStealth([tok]));
+  const u = confirmTx([ann(S(3), 'UNKNOWN', null, 5)], byStealth([tok]));
   assert.equal(u.assetMismatch, 0);
   assert.equal(u.payments[0]?.asset, 'TOKEN');
 });
@@ -150,13 +158,13 @@ test('the payment transaction is the one that moved the value, inside the window
   const at = C + 10_000;
   // first announcement of the address: paid up to a day before it (payers often send first), or 12 blocks after
   for (const b of [at - WINDOW_BEFORE_FIRST, at - 6, at, at + WINDOW_AFTER]) {
-    const r = confirmPayments([ann(S(4), 'ETH', null, 6, at)], byStealth([arrive(S(4), 7, b, null)]));
+    const r = confirmTx([ann(S(4), 'ETH', null, 6, at)], byStealth([arrive(S(4), 7, b, null)]));
     assert.equal(r.payments.length, 1, `block ${b - at}`);
     assert.equal(r.payments[0]?.txHash, h(7));
     assert.equal(r.payments[0]?.blockNumber, b);
   }
   for (const b of [at - WINDOW_BEFORE_FIRST - 1, at + WINDOW_AFTER + 1]) {
-    const r = confirmPayments([ann(S(4), 'ETH', null, 6, at)], byStealth([arrive(S(4), 7, b, null)]));
+    const r = confirmTx([ann(S(4), 'ETH', null, 6, at)], byStealth([arrive(S(4), 7, b, null)]));
     assert.equal(r.unfunded, 1, `block ${b - at}`);
   }
   // a later announcement of the same address only looks 2 blocks back: gas sent after the first payment is not a new payment
@@ -164,21 +172,21 @@ test('the payment transaction is the one that moved the value, inside the window
   const later = ann(S(4), 'ETH', null, 8, at + 500);
   const paid = arrive(S(4), 6, at, TA);
   for (const b of [at + 500 - WINDOW_BEFORE, at + 500 + WINDOW_AFTER]) {
-    const r = confirmPayments([first, later], byStealth([paid, arrive(S(4), 9, b, null)]));
+    const r = confirmTx([first, later], byStealth([paid, arrive(S(4), 9, b, null)]));
     assert.deepEqual(r.payments.map((p) => p.asset), ['TOKEN', 'ETH'], `block ${b - at - 500}`);
   }
-  const gas = confirmPayments([first, later], byStealth([paid, arrive(S(4), 9, at + 500 - WINDOW_BEFORE - 1, null)]));
+  const gas = confirmTx([first, later], byStealth([paid, arrive(S(4), 9, at + 500 - WINDOW_BEFORE - 1, null)]));
   assert.deepEqual(gas.payments.map((p) => p.asset), ['TOKEN']);
   assert.equal(gas.unfunded, 1);
   // the address sending to itself is not a payment; two announcements for one transfer are one payment
-  assert.equal(confirmPayments([ann(S(4), 'ETH', null, 6, at)], byStealth([arrive(S(4), 7, at, null, S(4))])).unfunded, 1);
-  const twice = confirmPayments([ann(S(4), 'ETH', null, 6, at), ann(S(4), 'ETH', null, 8, at + 1)], byStealth([arrive(S(4), 7, at, null)]));
+  assert.equal(confirmTx([ann(S(4), 'ETH', null, 6, at)], byStealth([arrive(S(4), 7, at, null, S(4))])).unfunded, 1);
+  const twice = confirmTx([ann(S(4), 'ETH', null, 6, at), ann(S(4), 'ETH', null, 8, at + 1)], byStealth([arrive(S(4), 7, at, null)]));
   assert.equal(twice.payments.length, 1);
 });
 
 test('Umbra announcements pass through unchanged: the Umbra contract moves the funds itself', () => {
   const u: PaymentLog = { ...ann(S(5), 'ETH', null, 9), source: 'umbra' };
-  const r = confirmPayments([u], () => []);
+  const r = confirmTx([u], () => []);
   assert.deepEqual(r.payments, [u]);
   assert.equal(r.unfunded, 0);
 });
@@ -187,31 +195,31 @@ test('N14 (Rusdi, 3 Nov, Low): token dust from a stranger in the 12 blocks after
   const at = C + 20_000;
   const eth = arrive(S(6), 20, at + 1, null);
   const dust = arrive(S(6), 21, at + 5, TA, X);
-  const r = confirmPayments([ann(S(6), 'ETH', null, 19, at)], byStealth([eth, dust]));
+  const r = confirmTx([ann(S(6), 'ETH', null, 19, at)], byStealth([eth, dust]));
   assert.deepEqual(r.payments.map((p) => [p.asset, p.token, p.txHash]), [['ETH', null, h(20)]]);
   assert.equal(r.tokenDust, 1);
   assert.equal(r.assetMismatch, 0);
   // the token is the payment when another announcement of the address claims it (a real token payment next to an ETH claim)
-  const claimed = confirmPayments([ann(S(6), 'ETH', null, 19, at), ann(S(6), 'TOKEN', TA, 22, at + 2)], byStealth([eth, dust]));
+  const claimed = confirmTx([ann(S(6), 'ETH', null, 19, at), ann(S(6), 'TOKEN', TA, 22, at + 2)], byStealth([eth, dust]));
   assert.ok(claimed.payments.some((p) => p.asset === 'TOKEN' && p.token === TA));
   // the token arrives in the same transaction as the ETH: a gas tip, so the token is the payment (as before)
-  const tip = confirmPayments([ann(S(6), 'ETH', null, 19, at)], byStealth([arrive(S(6), 23, at + 1, null), arrive(S(6), 23, at + 1, TA)]));
+  const tip = confirmTx([ann(S(6), 'ETH', null, 19, at)], byStealth([arrive(S(6), 23, at + 1, null), arrive(S(6), 23, at + 1, TA)]));
   assert.deepEqual(tip.payments.map((p) => p.asset), ['TOKEN']);
   // without ETH the token still decides (the stranger's ETH claim for a token-paid address, tested above)
-  assert.equal(confirmPayments([ann(S(6), 'ETH', null, 19, at)], byStealth([dust])).payments[0]?.asset, 'TOKEN');
+  assert.equal(confirmTx([ann(S(6), 'ETH', null, 19, at)], byStealth([dust])).payments[0]?.asset, 'TOKEN');
 });
 
 test('N06 (Swaplane EPH-10, 3 Nov, Low): one transaction that pays two stealth addresses is two payments, not one', () => {
   const at = C + 30_000;
   const logs = [ann(S(7), 'ETH', null, 30, at), ann(S(8), 'ETH', null, 31, at)];
   const batch = [arrive(S(7), 32, at + 1, null), arrive(S(8), 32, at + 1, null)]; // one tx, two recipients
-  const r = confirmPayments(logs, byStealth(batch));
+  const r = confirmTx(logs, byStealth(batch));
   assert.deepEqual(r.payments.map((p) => p.stealth).sort(), [S(7), S(8)].sort());
   // the same for a token batch
-  const tokens = confirmPayments([ann(S(7), 'TOKEN', TA, 30, at), ann(S(8), 'TOKEN', TA, 31, at)], byStealth([arrive(S(7), 33, at, TA), arrive(S(8), 33, at, TA)]));
+  const tokens = confirmTx([ann(S(7), 'TOKEN', TA, 30, at), ann(S(8), 'TOKEN', TA, 31, at)], byStealth([arrive(S(7), 33, at, TA), arrive(S(8), 33, at, TA)]));
   assert.equal(tokens.payments.length, 2);
   // two announcements for one transfer to the SAME address are still one payment
-  const twice = confirmPayments([ann(S(7), 'ETH', null, 30, at), ann(S(7), 'ETH', null, 34, at + 1)], byStealth([batch[0]!]));
+  const twice = confirmTx([ann(S(7), 'ETH', null, 30, at), ann(S(7), 'ETH', null, 34, at + 1)], byStealth([batch[0]!]));
   assert.equal(twice.payments.length, 1);
 });
 
@@ -226,7 +234,7 @@ test('N14 bypass (Rusdi 4 Nov): a stranger announcing a token claim for the addr
   const eth = arrive(S(9), 40, at + 1, null);
   const dust = arrive(S(9), 41, at + 3, TB, X);
   for (const claim of [ann(S(9), 'TOKEN', TB, 42, at + 4), ann(S(9), 'TOKEN', null, 42, at + 4)]) {
-    const r = confirmPayments([ann(S(9), 'ETH', null, 39, at), claim], byStealth([eth, dust]));
+    const r = confirmTx([ann(S(9), 'ETH', null, 39, at), claim], byStealth([eth, dust]));
     const real = r.payments.filter((p) => p.txHash === h(40));
     assert.deepEqual(real.map((p) => [p.asset, p.token]), [['ETH', null]], 'the real payment stays ETH');
     // the griefer's own announcement confirms only its own dust, when it names that token
@@ -241,12 +249,12 @@ test('Ox Radu 5 Nov: short or token-free metadata cannot be flipped by dust eith
   const after = arrive(S(10), 51, at + 5, TB, X); // dust after the announcement
   const before = arrive(S(10), 52, at - 3_000, TB, X2); // dust inside the 7,200 blocks before a first announcement (PoC E)
   for (const asset of ['UNKNOWN', 'TOKEN'] as const) {
-    const r = confirmPayments([ann(S(10), asset, null, 49, at)], byStealth([eth, after, before]));
+    const r = confirmTx([ann(S(10), asset, null, 49, at)], byStealth([eth, after, before]));
     assert.deepEqual(r.payments.map((p) => [p.asset, p.txHash]), [['ETH', h(50)]], asset);
     assert.equal(r.tokenDust, 1, asset);
   }
   // a griefer front-running with his own claim naming his token and his own dust: two payments, the real one stays ETH
-  const g = confirmPayments([ann(S(10), 'TOKEN', TB, 53, at), ann(S(10), 'UNKNOWN', null, 49, at)], byStealth([eth, after]));
+  const g = confirmTx([ann(S(10), 'TOKEN', TB, 53, at), ann(S(10), 'UNKNOWN', null, 49, at)], byStealth([eth, after]));
   assert.deepEqual(g.payments.filter((p) => p.txHash === h(50)).map((p) => p.asset), ['ETH']);
 });
 
@@ -254,7 +262,7 @@ test('Rusdi 4 Nov (2): a token claim confirms only the named token; a different 
   const at = C + 60_000;
   const real = arrive(S(11), 60, at + 1, TA, P);
   const dust = arrive(S(11), 61, at + 2, TB, X);
-  const r = confirmPayments([ann(S(11), 'TOKEN', TA, 59, at)], byStealth([real, dust]));
+  const r = confirmTx([ann(S(11), 'TOKEN', TA, 59, at)], byStealth([real, dust]));
   assert.deepEqual(r.payments.map((p) => [p.asset, p.token, p.txHash]), [['TOKEN', TA, h(60)]]);
   assert.equal(r.tokenDust, 1);
   // so the stranger never joins the H2 payer set
@@ -266,7 +274,7 @@ test('a token payment with short metadata and gas ETH from the same payer is sti
   const at = C + 70_000;
   const token = arrive(S(12), 70, at + 1, TA, P);
   const gas = arrive(S(12), 71, at + 2, null, P);
-  const r = confirmPayments([ann(S(12), 'UNKNOWN', null, 69, at)], byStealth([token, gas]));
+  const r = confirmTx([ann(S(12), 'UNKNOWN', null, 69, at)], byStealth([token, gas]));
   assert.deepEqual(r.payments.map((p) => [p.asset, p.token]), [['TOKEN', TA]]);
   assert.equal(r.tokenDust, 0);
 });
@@ -277,8 +285,8 @@ test('Ox Radu 5 Nov end to end: the griefed world gives the same withdrawn and H
   const dust = arrive(S(13), 81, at + 2, TB, X);
   const w = [out(S(13), P, 'eth', null, 180, at + 100)];
   const senders = { [h(80)]: P, [h(81)]: X };
-  const clean = confirmPayments([ann(S(13), 'UNKNOWN', null, 79, at)], byStealth([eth]));
-  const griefed = confirmPayments([ann(S(13), 'TOKEN', TB, 82, at), ann(S(13), 'UNKNOWN', null, 79, at)], byStealth([eth, dust]));
+  const clean = confirmTx([ann(S(13), 'UNKNOWN', null, 79, at)], byStealth([eth]));
+  const griefed = confirmTx([ann(S(13), 'TOKEN', TB, 82, at), ann(S(13), 'UNKNOWN', null, 79, at)], byStealth([eth, dust]));
   const mc = analyze(world(toPayments(clean.payments, senders), w), opts).all;
   const mg = analyze(world(toPayments(griefed.payments, senders), w), opts).all;
   assert.equal(mc.withdrawn, 1);
@@ -313,14 +321,14 @@ test('EPH-17 (Swaplane, 3 Nov): a later, really funded ETH payment does not hide
   const at = C + 90_000;
   const logs = [ann(S(15), 'TOKEN', TA, 91, at), ann(S(15), 'ETH', null, 93, at + 40)];
   const transfers = [arrive(S(15), 91, at, TA, P), arrive(S(15), 92, at + 41, null, X)]; // 1 wei of ETH from a stranger, later
-  const r = confirmPayments(logs, byStealth(transfers));
+  const r = confirmTx(logs, byStealth(transfers));
   assert.deepEqual(r.payments.map((p) => p.asset).sort(), ['ETH', 'TOKEN']);
   const m = analyze(world(toPayments(r.payments, { [h(91)]: P, [h(92)]: X }), [out(S(15), P, 'token', TA, 190, at + 100)]), opts).all;
   assert.equal(m.withdrawn, 1);
   assert.equal(m.h2Any, 1);
   assert.equal(m.identityLinked, 1);
   // the same when both arrive in one block: any asset that was paid in leaving counts
-  const same = confirmPayments([ann(S(16), 'TOKEN', TA, 94, at), ann(S(16), 'ETH', null, 95, at)], byStealth([arrive(S(16), 94, at, TA, P), arrive(S(16), 95, at, null, X)]));
+  const same = confirmTx([ann(S(16), 'TOKEN', TA, 94, at), ann(S(16), 'ETH', null, 95, at)], byStealth([arrive(S(16), 94, at, TA, P), arrive(S(16), 95, at, null, X)]));
   const ms = analyze(world(toPayments(same.payments, { [h(94)]: P, [h(95)]: X }), [out(S(16), P, 'token', TA, 196, at + 100)]), opts).all;
   assert.equal(ms.withdrawn, 1);
   assert.equal(ms.h2Any, 1);

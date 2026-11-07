@@ -96,7 +96,7 @@ export const TOKEN_SELECTORS = new Set([
 ]);
 
 /** Bump when cached data formats or fetch parameters change; a mismatch clears the cache. */
-export const SCAN_VERSION = 5;
+export const SCAN_VERSION = 6;
 
 /** Pages of 1,000 transfers read per address before the lookup is marked truncated. */
 export const MAX_TRANSFER_PAGES = 10;
