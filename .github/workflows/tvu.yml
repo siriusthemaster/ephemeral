@@ -74,6 +74,9 @@ jobs:
           path: data
           key: tvu-ckpt-${{ github.run_id }}
           restore-keys: tvu-ckpt-
+      - name: Probe endpoints
+        continue-on-error: true
+        run: node tvu/probe.mjs
       - name: Collect (no publish)
         run: |
           set -o pipefail
