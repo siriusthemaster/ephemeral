@@ -39,7 +39,7 @@ jobs:
       - name: Commit to stats-data
         run: |
           cd data
-          git add tvu.json checkpoint.json ./*.addr.gz ./*.skip.gz
+          for f in tvu.json checkpoint.json *.addr.gz *.skip.gz; do [ -e "$f" ] && git add "$f"; done
           if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
           git -c user.name=siriusthemaster -c user.email=210255227+siriusthemaster@users.noreply.github.com commit -m "tvu: daily update"
           for i in 1 2 3; do
