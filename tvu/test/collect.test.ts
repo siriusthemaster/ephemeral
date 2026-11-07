@@ -58,7 +58,7 @@ test('routers are excluded for good, filters drop contracts, nonce and whales', 
   assert.equal(t.label, 'all protocols combined');
   const text = readFileSync(join(d, 'tvu.json'), 'utf8');
   assert.ok(!/0xeed50c|0x231191/i.test(text));
-  assert.ok(!/[–—]/.test(text));
+  assert.ok(!/[\u2013\u2014]/.test(text));
 });
 
 test('excluded caller counts are never kept', () => {
