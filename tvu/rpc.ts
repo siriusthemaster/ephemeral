@@ -121,8 +121,8 @@ export class FallbackRpc implements Rpc {
             this.pref = idx;
             return out;
           } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            if (trace.length < 12) trace.push(`${url.replace(/^https:\/\//, '').slice(0, 40)}: ${msg.slice(0, 90)}`);
+            const msg = redact(e instanceof Error ? e.message : String(e), url);
+            if (trace.length < 12) trace.push(`${hostOf(url)}: ${msg.slice(0, 90)}`);
             if (/HTTP 40[13]|unauthorized|api key|personal token/i.test(msg)) {
               this.dead.add(url); // needs a key: never works here
               last = msg;
@@ -187,4 +187,26 @@ export class FallbackRpc implements Rpc {
       return out;
     }
   }
+}
+
+/** Host only: a keyed URL (path or query) must never reach the public run log. */
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return 'rpc';
+  }
+}
+
+/** Removes the full URL (and its path, where keys live) from an error message. */
+export function redact(msg: string, url: string): string {
+  let out = msg.split(url).join(hostOf(url));
+  try {
+    const u = new URL(url);
+    const tail = u.pathname + u.search;
+    if (tail.length > 1) out = out.split(tail).join('/***');
+  } catch {
+    /* not a URL */
+  }
+  return out;
 }

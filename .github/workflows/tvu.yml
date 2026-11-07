@@ -7,12 +7,12 @@ on:
   workflow_dispatch:
 
 env:
-  RPC_ETHEREUM: ${{ vars.RPC_ETHEREUM }}
-  RPC_ARBITRUM: ${{ vars.RPC_ARBITRUM }}
-  RPC_OPTIMISM: ${{ vars.RPC_OPTIMISM }}
-  RPC_POLYGON: ${{ vars.RPC_POLYGON }}
-  RPC_BASE: ${{ vars.RPC_BASE }}
-  RPC_GNOSIS: ${{ vars.RPC_GNOSIS }}
+  RPC_ETHEREUM: ${{ secrets.RPC_ETHEREUM }}
+  RPC_ARBITRUM: ${{ secrets.RPC_ARBITRUM }}
+  RPC_OPTIMISM: ${{ secrets.RPC_OPTIMISM }}
+  RPC_POLYGON: ${{ secrets.RPC_POLYGON }}
+  RPC_BASE: ${{ secrets.RPC_BASE }}
+  RPC_GNOSIS: ${{ secrets.RPC_GNOSIS }}
 
 jobs:
   tvu:
