@@ -118,7 +118,10 @@ export async function run(o: RunOpts, d: Deps): Promise<RunResult> {
   for (const c of chains) {
     const rpc = rpcs[c.key]!;
     const s = states[c.key] as ChainState;
-    const blockNum = heads[c.key]!;
+    // Values are read at a fresh head, not at the head the scan started from: a first scan takes hours, and a public
+    // node without archive state cannot answer for a block that old ("Unknown state", Arbitrum, 7 Nov). Addresses
+    // announced since the scan block are not in the list yet; the next run adds them.
+    const blockNum = hexNum(await rpc.call<string>('eth_blockNumber', [])) - RULES.confirmations;
     const block = '0x' + blockNum.toString(16);
     const blk = await rpc.call<{ timestamp: string }>('eth_getBlockByNumber', [block, false]);
     asOfSec = Math.min(asOfSec, hexNum(blk.timestamp));

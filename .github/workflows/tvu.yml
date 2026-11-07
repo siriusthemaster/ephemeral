@@ -35,8 +35,12 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Collect
-        run: node --import tsx tvu/collect.ts --data data --budget-minutes 300
+        # tvu.json is written only when the repository variable TVU_PUBLISH is 1 (the number is approved first);
+        # until then the run log carries the summary line.
+        run: node --import tsx tvu/collect.ts --data data --budget-minutes 300 ${{ vars.TVU_PUBLISH == '1' && ' ' || '--no-publish' }}
       - name: Commit to stats-data
+        # also after a failed or timed out Collect: the scan checkpoint is saved, so the next run resumes
+        if: always()
         run: |
           cd data
           for f in tvu.json checkpoint.json *.addr.gz *.skip.gz; do [ -e "$f" ] && git add "$f"; done
