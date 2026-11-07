@@ -12,5 +12,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["research/**/*.ts"]
+  "include": ["research/**/*.ts", "tvu/**/*.ts"]
 }

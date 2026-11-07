@@ -9,7 +9,7 @@
   "scripts": {
     "scan": "tsx research/scan.ts",
     "scan:sepolia": "tsx research/scan.ts --chain sepolia",
-    "test": "node --import tsx --test research/test/*.test.ts",
+    "test": "node --import tsx --test research/test/*.test.ts tvu/test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
