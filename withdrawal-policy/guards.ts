@@ -43,8 +43,12 @@ export type GuardInput = {
   gasFrom?: Hex[] | null;
   /** Every payer of your other payments (their funding payers). Gas from one of them ties the two payments. */
   otherPayers?: Hex[];
-  /** For a token withdrawal: the token contract. Sending the token to its own contract is blocked like a burn. */
+  /** For a token withdrawal: the token contract (required). Sending the token to its own contract is blocked like a
+   *  burn; a token withdrawal without it is blocked too (cannot check). */
   tokenAddress?: Hex;
+  /** Wallets that published this meta-address in a registry (ERC-6538): like the key wallet, never a destination
+   *  (bug bounty 3 Nov: the scanner counts a withdrawal to any registrant as H1, the guard did not see them). */
+  registrants?: Hex[];
   now: number;
 };
 
@@ -63,9 +67,27 @@ const UNSPENDABLE = new Map([
     const n = (i + 1).toString(16).padStart(2, '0');
     return [`0x${'0'.repeat(38)}${n}`, `the precompile 0x…${n}`];
   }),
+  // bug bounty 3 Nov: the P256VERIFY precompile (RIP-7212, live on several L2s) and the system address that EIP-4788
+  // calls come from and EIP-7708 logs ETH moves under: nobody holds a key for either
+  ['0x0000000000000000000000000000000000000100', 'the P256VERIFY precompile 0x…0100'],
+  ['0xfffffffffffffffffffffffffffffffffffffffe', 'the system address 0xff…fe'],
 ]);
 /** True for a destination nothing ever comes back from (the list above), in any letter case. */
 export const isUnspendable = (a: unknown) => typeof a === 'string' && UNSPENDABLE.has(a.trim().toLowerCase());
+
+
+// OP-stack deposits (Base, OP Mainnet): a deposit a contract starts on L1 arrives on L2 (transaction type 0x7e) from the
+// L1 address plus 0x1111000000000000000000000000000000001111. Compared the plain way, gas or a payment sent that way by
+// a wallet linked to you looked unrelated (bug bounty 7 Nov). `l1Of` undoes that offset; on chains without deposits the
+// result is a different address that matches nothing.
+const ALIAS_OFFSET = 0x1111000000000000000000000000000000001111n;
+const U160 = 1n << 160n;
+export const l1Of = (a: string): string => `0x${((BigInt(a) - ALIAS_OFFSET + U160) % U160).toString(16).padStart(40, '0')}`;
+const withL1 = (list: readonly string[]): string[] => {
+  const out = [...list];
+  for (const x of list) if (/^0x[0-9a-fA-F]{40}$/.test(x)) out.push(l1Of(x));
+  return out;
+};
 
 export function withdrawChecks(g: GuardInput): Check[] {
   const out: Check[] = [];
@@ -74,6 +96,9 @@ export function withdrawChecks(g: GuardInput): Check[] {
   // a token sent to its own contract is stuck there for good
   if (g.isToken && same(g.destination, g.tokenAddress))
     return [{ id: 'burn', level: 'block', text: 'That is the token contract itself. Tokens sent there are lost for good.' }];
+  // fail closed like every other input (bug bounty 3 Nov): without the token contract the check above cannot run
+  if (g.isToken && (typeof g.tokenAddress !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(g.tokenAddress)))
+    out.push({ id: 'token', level: 'block', text: 'Cannot check, token contract unknown. Withdraw stays locked until it is known.' });
   if (!isAddress(g.destination)) return [{ id: 'addr', level: 'block', text: 'Enter a valid Ethereum address.' }];
   if (same(g.destination, g.stealthAddress)) out.push({ id: 'self', level: 'block', text: 'That is the payment address itself.' });
 
@@ -84,6 +109,12 @@ export function withdrawChecks(g: GuardInput): Check[] {
       level: 'block',
       text: 'H1: this is the wallet that created your stealth keys. Withdrawing here links the payment to you directly.',
     });
+  else if (Array.isArray(g.registrants) && g.registrants.some((r) => same(g.destination, r)))
+    out.push({
+      id: 'H1',
+      level: 'block',
+      text: 'H1: this wallet published your meta-address in the registry. Withdrawing here links the payment to you directly.',
+    });
   else if (!known(g.walletAddress))
     out.push({ id: 'H1', level: 'block', text: 'H1: cannot check, key wallet unknown. Withdraw stays locked until the key wallet is known.' });
   else out.push({ id: 'H1', level: 'ok', text: 'H1: not your key wallet.' });
@@ -92,7 +123,7 @@ export function withdrawChecks(g: GuardInput): Check[] {
   // known payer only warned). Every payer read from the chain counts, not only the one passed as `payer`. Fail closed:
   // while the payer is unknown, nothing can be ruled out, so every destination is blocked.
   const payers = [g.payer, ...(Array.isArray(g.payers) ? g.payers : [])];
-  if (payers.some((p) => known(p) && same(g.destination, p)))
+  if (withL1(payers.filter((p): p is Hex => known(p))).some((p) => same(g.destination, p)))
     out.push({ id: 'H2', level: 'block', text: 'H2: this address sent you the payment. Sending it back links both ends.' });
   else if (!known(g.payer))
     out.push({ id: 'H2', level: 'block', text: 'H2: cannot check, payer unknown. Withdraw stays locked until the payer is known.' });
@@ -121,10 +152,13 @@ export function withdrawChecks(g: GuardInput): Check[] {
   // H5 gas funding. A payment whose asset could not be read counts as a possible token payment. Holding ETH is not enough
   // for a token payment (31 Oct): where that ETH came from is checked against every wallet linked to you.
   const tokenLike = g.isToken || g.assetUnknown === true;
-  const gasFrom = Array.isArray(g.gasFrom) ? g.gasFrom.filter((x): x is Hex => typeof x === 'string') : null;
+  const gasFrom = Array.isArray(g.gasFrom) ? (withL1(g.gasFrom.filter((x): x is Hex => typeof x === 'string')) as Hex[]) : null;
   const has = (list: string[], a: string) => list.some((x) => same(x, a));
   const mine: [string | undefined, string][] = [
     [g.walletAddress, 'your key wallet'],
+    ...(Array.isArray(g.registrants) ? g.registrants : []).map((r): [string, string] => [r, 'a wallet that published your meta-address']),
+    // gas from the destination itself: withdrawing there sends the payment back to whoever paid its gas (bug bounty 3 Nov)
+    [g.destination, 'this destination'],
     ...g.ownStealthAddresses.filter((a) => !same(a, g.stealthAddress)).map((a): [string, string] => [a, 'another of your payment addresses']),
     ...g.usedDestinations.map((a): [string, string] => [a, 'an address your payments were withdrawn to']),
   ];

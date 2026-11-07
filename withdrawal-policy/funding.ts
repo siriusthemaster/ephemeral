@@ -173,6 +173,23 @@ const WORD = /^0x[0-9a-fA-F]{64}$/;
 const isAddr = (a: unknown): a is string => typeof a === 'string' && ADDRESS.test(a);
 const isHash = (h: unknown): h is Hex => typeof h === 'string' && HASH.test(h);
 const low = (a: string) => a.toLowerCase() as Hex;
+
+/** The amount an ERC-1155 log moved: the value of TransferSingle, the sum of TransferBatch's values; null when the
+ *  data cannot be read. A log of zero moves nothing (bug bounty 3 Nov). */
+function erc1155Amount(topic0: string, data: unknown): bigint | null {
+  if (typeof data !== 'string' || !/^0x([0-9a-fA-F]{64})*$/.test(data)) return null;
+  const w = (i: number) => BigInt('0x' + data.slice(2 + i * 64, 2 + (i + 1) * 64));
+  const words = (data.length - 2) / 64;
+  if (topic0 === TRANSFER_SINGLE_TOPIC) return words === 2 ? w(1) : null;
+  if (words < 4) return null;
+  const at = w(1) / 32n; // offset of the values array, in words
+  if (at >= BigInt(words)) return null;
+  const n = w(Number(at));
+  if (n > BigInt(words) || Number(at) + 1 + Number(n) > words) return null;
+  let sum = 0n;
+  for (let i = 0; i < Number(n); i++) sum += w(Number(at) + 1 + i);
+  return sum;
+}
 const pad = (a: string) => `0x${'0'.repeat(24)}${a.slice(2).toLowerCase()}` as Hex;
 const topicAddr = (t: string) => `0x${t.slice(-40)}`.toLowerCase() as Hex;
 const big = (v: string | number | bigint | null | undefined): bigint | null => {
@@ -306,6 +323,8 @@ export async function readFunding(
       if ((t[0] === TRANSFER_SINGLE_TOPIC || t[0] === TRANSFER_BATCH_TOPIC) && isAddr(l.address) && l.address.toLowerCase() !== SYSTEM_ADDRESS) {
         if (t.length !== 4 || !ADDRESS_TOPIC.test(t[1] ?? '') || !ADDRESS_TOPIC.test(t[2] ?? '') || !ADDRESS_TOPIC.test(t[3] ?? '')) continue;
         if (topicAddr(t[3] ?? '') !== a) continue;
+        const amount = erc1155Amount(t[0] ?? '', l.data);
+        if (amount === 0n) continue; // moved nothing: no payer, no arrival (bug bounty 3 Nov)
         const li = big(l.logIndex);
         tokens.push({
           token: low(l.address),
@@ -326,6 +345,8 @@ export async function readFunding(
       const kind = t.length === 4 ? 'erc721' : t.length === 3 ? 'erc20' : null;
       if (!kind) continue;
       const standard = kind === 'erc20' && typeof l.data === 'string' && WORD.test(l.data);
+      // a Transfer of zero moved nothing: its sender is no payer and its block no arrival (bug bounty 3 Nov)
+      if (standard && BigInt(l.data as string) === 0n) continue;
       const li = big(l.logIndex);
       tokens.push({
         token: low(l.address),

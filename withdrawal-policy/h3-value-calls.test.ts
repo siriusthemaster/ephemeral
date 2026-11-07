@@ -36,7 +36,7 @@ function explorer(tx: Tx, details: Record<string, unknown> = {}) {
     return json({ items: [], next_page_params: null });
   }) as typeof fetch;
 }
-const tokenLogs: TokenLogCheck = { node: { blockNumber: async () => 1000n, getLogs: async () => [] }, fromBlock: 0n };
+const tokenLogs: TokenLogCheck = { node: { blockNumber: async () => 1000n, getLogs: async () => [], getCode: async () => '0x' }, fromBlock: 0n };
 const load = () => loadWithdrawalHistory(net, [S1, S2], undefined, { [S1]: 1, [S2]: 0 }, tokenLogs);
 const h3 = (history: { from: string; to: string }[], ok: boolean, destination = D) =>
   withdrawChecks({

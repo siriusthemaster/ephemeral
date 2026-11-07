@@ -60,6 +60,7 @@ function node(logs: RpcLog[]): TokenLogCheck {
   return {
     node: {
       blockNumber: async () => 1_000n,
+      getCode: async () => '0x',
       getLogs: async (q) =>
         logs.filter((l) => q.topics.every((t, i) => t === null || (l.topics?.[i] ?? '').toLowerCase() === t.toLowerCase())),
     },

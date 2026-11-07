@@ -41,7 +41,7 @@ function explorer(opts: { lagging: boolean; sender?: Hex }) {
   }) as typeof fetch;
 }
 // The node: no token transfer from either address (the withdrawal was ETH), so the token side passes.
-const tokenLogs: TokenLogCheck = { node: { blockNumber: async () => 1_000n, getLogs: async () => [] }, fromBlock: 0n };
+const tokenLogs: TokenLogCheck = { node: { blockNumber: async () => 1_000n, getLogs: async () => [], getCode: async () => '0x' }, fromBlock: 0n };
 
 function h3(own: Hex[], r: { history: { from: string; to: string }[]; ok: boolean }, destination = D, from = S2) {
   return withdrawChecks({

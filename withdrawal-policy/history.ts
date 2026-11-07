@@ -15,8 +15,13 @@ export type RpcLog = {
 };
 /** One eth_getLogs call: logs with these topics in [fromBlock, toBlock] (both inclusive). */
 export type LogFetcher = (q: { fromBlock: bigint; toBlock: bigint; topics: (Hex | null)[] }) => Promise<RpcLog[]>;
-/** The node the token transfers are read from directly, not through the explorer. Injectable, so tests need no node. */
-export type NodeReader = { getLogs: LogFetcher; blockNumber: () => Promise<bigint> };
+/** The node the token transfers are read from directly, not through the explorer. Injectable, so tests need no node.
+ * `getCode`: contract code at an address ('0x' = none), for an ETH send to a contract and for a payment address that
+ * has code itself (an EIP-7702 delegation or a smart account). Without it such sends cannot be followed. */
+export type NodeReader = { getLogs: LogFetcher; blockNumber: () => Promise<bigint>; getCode?: (address: Hex) => Promise<string | null | undefined> };
+/** Code at an address: '0x' = none, null = could not be read. */
+type CodeOf = (address: string) => Promise<string | null>;
+const hasCode = (c: string) => /^0x([0-9a-f]{2})+$/i.test(c);
 /**
  * Token transfers sent from each address, read straight from the node: ERC-20 (and ERC-721) Transfer logs and ERC-1155
  * TransferSingle and TransferBatch logs with `from` = the address, from its first payment block (or `fromBlock`) to the
@@ -141,6 +146,7 @@ async function sentBy(
   base: string,
   address: Hex,
   signal?: AbortSignal,
+  codeOf?: CodeOf,
 ): Promise<{ out: Transfer[]; txCount: number; indexed: Set<string>; unattributed: number }> {
   const out: Transfer[] = [];
   const indexed = new Set<string>();
@@ -186,6 +192,14 @@ async function sentBy(
     }
     const input = await inputOf(t);
     if (input === null || (input !== '' && input.toLowerCase() !== '0x')) unattributed++;
+    else {
+      // A plain send (no calldata) to an address with code is not a transfer to that address either (bug bounty, 3 and
+      // 7 Nov; the client since 0.2.11): a contract can pass the ETH on in its receive function (a forwarder, a
+      // splitter, a delegated EOA), and where it went cannot be read from the send. The recipient still counts; code
+      // that cannot be read counts as code.
+      const code = codeOf ? await codeOf(t.to.hash) : null;
+      if (code === null || hasCode(code)) unattributed++;
+    }
   }
   for (const t of calls) {
     const to = t.to?.hash;
@@ -283,6 +297,7 @@ export function jsonRpcNode(url: string): NodeReader {
     blockNumber: async () => BigInt((await call('eth_blockNumber', [])) as string),
     getLogs: async (q) =>
       (await call('eth_getLogs', [{ fromBlock: hex(q.fromBlock), toBlock: hex(q.toBlock), topics: q.topics }])) as RpcLog[],
+    getCode: async (address) => (await call('eth_getCode', [address, 'latest'])) as string,
   };
 }
 
@@ -338,18 +353,38 @@ export async function loadWithdrawalHistory(
   // the node's head, read once before the explorer: every log up to here must already be indexed
   const latest = tokenLogs ? await tokenLogs.node.blockNumber().catch(() => null) : null;
   if (latest === null) ok = false;
+  // contract code from the node, read once per address; null = could not be read
+  const codes = new Map<string, Promise<string | null>>();
+  const codeOf: CodeOf = (x) => {
+    const k = x.toLowerCase();
+    if (!codes.has(k))
+      codes.set(
+        k,
+        tokenLogs && typeof tokenLogs.node.getCode === 'function'
+          ? tokenLogs.node
+              .getCode(k as Hex)
+              .then((c) => (typeof c === 'string' ? c : c === undefined || c === null ? '0x' : null))
+              .catch(() => null)
+          : Promise.resolve(null),
+      );
+    return codes.get(k)!;
+  };
   const queue = [...addresses];
   const worker = async () => {
     while (queue.length) {
       const a = queue.shift()!;
       try {
-        const r = await sentBy(base, a, signal);
+        const r = await sentBy(base, a, signal, codeOf);
         history.push(...r.out);
         const expected = nonces.get(a.toLowerCase());
         // no usable nonce: the explorer cannot be checked against the chain, so the history is incomplete (fail safe)
         if (expected === undefined || expected === null) ok = false;
         else if (r.txCount < expected) ok = false; // explorer lags the chain: history incomplete
         if (r.unattributed > 0) ok = false; // a call we cannot attribute (zero-value or value-bearing): history incomplete
+        // A payment address with code (an EIP-7702 delegation or a smart account) can send ETH in a call a relayer pays
+        // for, with no transaction of its own and no log, so its history cannot be complete (client 0.2.11).
+        const own = await codeOf(a);
+        if (own === null || hasCode(own)) ok = false;
         if (tokenLogs && latest !== null && (await unindexedTokenTransfers(tokenLogs, a, latest, r.indexed, signal)) > 0)
           ok = false; // a token transfer on chain is missing from the explorer: history incomplete
       } catch {
