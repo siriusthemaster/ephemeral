@@ -110,11 +110,10 @@ export class FallbackRpc implements Rpc {
           } catch (e) {
             if (e instanceof RpcError) {
               if (isRangeError(e) && !RATE_RE.test(e.message)) throw e; // caller shrinks the range
-              if (e.code === -32601 || e.code === -32600) {
+              if (!RATE_RE.test(e.message)) {
                 last = e.message;
-                break; // method or batch not supported here, next url
+                break; // this url cannot answer (no archive access, method or batch not supported): next url
               }
-              if (!RATE_RE.test(e.message)) throw e; // a real answer, not a transport problem
             }
             last = e instanceof Error ? e.message : String(e);
             await this.sleep(Math.min(20_000, 500 * 2 ** attempt) + Math.floor(Math.random() * 250));
