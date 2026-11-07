@@ -36,7 +36,7 @@ import {
   type TransferPage,
   type TxLite,
 } from './lib/data.ts';
-import { confirmPayments } from './lib/confirm.ts';
+import { confirmPayments, neededTxs } from './lib/confirm.ts';
 import { decodeLogs, type PaymentLog } from './lib/decode.ts';
 import { analyze, type Funding, type Payment, type Registration, type Withdrawal } from './lib/heuristics.ts';
 import { scanLogs, type RawLog } from './lib/logs.ts';
@@ -172,12 +172,15 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
   const arrivals = new KV<TransferPage>(join(dir, 'transfers-in-payment.json'), 200);
   log(`Reading what reached ${announced.length} ERC-5564 stealth addresses...`);
   await fetchAllTransfers(rpc, announced, 'to', cfg.transferCategories, cfg.erc5564StartBlock, toBlock, arrivals, o.concurrency, 'payments received');
-  const confirmed = confirmPayments(paymentLogs, (s) => arrivals.get(s)?.transfers);
+  // Who signed each announcement and each arrival next to a token: the payer is the signer of the announcement's
+  // transaction, and only transactions signed by that payer bind a token (confirm.ts).
+  const txs = new KV<TxLite>(join(dir, 'txs.json'));
+  await fetchTxs(rpc, neededTxs(paymentLogs, (s) => arrivals.get(s)?.transfers), txs, o.concurrency);
+  const confirmed = confirmPayments(paymentLogs, (s) => arrivals.get(s)?.transfers, (hash) => txs.get(hash)?.from);
   paymentLogs = confirmed.payments;
   const stealths = [...new Set(paymentLogs.map((p) => p.stealth))];
 
   // 4. Who sent each payment, and when.
-  const txs = new KV<TxLite>(join(dir, 'txs.json'));
   await fetchTxs(rpc, paymentLogs.map((p) => p.txHash), txs, o.concurrency);
   const blockTimes = new KV<number>(join(dir, 'blocktimes.json'));
   await fetchBlockTimes(rpc, paymentLogs.filter((p) => p.blockTimestamp === undefined).map((p) => p.blockNumber), blockTimes, o.concurrency);
