@@ -43,6 +43,8 @@ The collector logs the all time number of Umbra and ERC-5564 announcements it sa
 
 Token balances use a fixed list and stablecoins are counted at 1 USD. A stealth address on two chains is two addresses. Public RPC endpoints can lag; the read block is 12 behind the head.
 
+Anyone can announce an address and fund it, so the rules above keep single addresses out of the number, not capital: whoever parks their own funds in many fresh announced addresses, or in Umbra, raises the total for as long as the funds stay there. That is what the number measures (value sitting where a stealth owner can take it), and it is why the parts and the address count are published next to it. The Umbra part is the balance of the Umbra contract and has no per-address cap. A move of more than 5x in a day on one chain stops the publish (bug bounty, 7 Nov).
+
 ## Running it
 
 `node --import tsx tvu/collect.ts --data <dir> [--budget-minutes 300] [--no-publish]`, or the `tvu` workflow (daily 00:40 UTC, or run it by hand). The first scan of all chains takes several runs on free public endpoints: progress is saved in `checkpoint.json` and the `*.addr.gz` and `*.skip.gz` files on the `stats-data` branch and the next run continues from there. Nothing about TVU is published until every chain is complete. Set the repository secrets `RPC_ETHEREUM`, `RPC_ARBITRUM`, `RPC_OPTIMISM`, `RPC_POLYGON`, `RPC_BASE`, `RPC_GNOSIS` (one URL, or several separated by commas) to use your own endpoints first; a keyed endpoint makes the first scan much faster. Use secrets, not variables: GitHub masks secrets in the public run log, and the log shows only the host of each endpoint.

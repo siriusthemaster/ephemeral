@@ -123,10 +123,21 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
         (p.asset === 'TOKEN' && p.token !== null && t.token === p.token) ||
         (namesNoToken && byPayer(t.hash)),
     );
+    // A token bound only by its name can also come from a stranger (the same token, any amount): when the payer
+    // signed a transfer of it, only those count (bug bounty 4 Nov, P4c).
+    const signedBound = payer === undefined ? [] : bound.filter((t) => byPayer(t.hash) || payerEth.some((e) => e.hash === t.hash));
+    const namesToken = p.asset === 'TOKEN' && p.token !== null;
     let tokens: TransferLite[];
-    if (bound.length > 0) tokens = bound;
+    if (signedBound.length > 0) tokens = signedBound;
+    else if (bound.length > 0) tokens = bound;
     else if (payer === undefined ? eth.length > 0 : payerEth.length > 0) tokens = []; // unknown payer: any ETH, as before 6 Nov
-    else tokens = allTokens; // the payer sent no ETH: the tokens are what was paid
+    else if (namesToken && payer !== undefined) {
+      // The announcement names a token that never arrived and its payer sent nothing: another token or a stranger's
+      // ETH next to it is not this payment (bug bounty 3 and 4 Nov, P4b). Left out as unfunded.
+      if (allTokens.length > 0) tokenDust++;
+      unfunded++;
+      continue;
+    } else tokens = allTokens; // the payer sent no ETH: the tokens are what was paid
     if (tokens.length < allTokens.length) tokenDust++;
     const asset = tokens.length > 0 ? 'TOKEN' : eth.length > 0 ? 'ETH' : null;
     if (asset === null) {

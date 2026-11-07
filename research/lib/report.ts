@@ -39,6 +39,8 @@ export interface Summary {
     announcementTokenDust: number;
     /** ERC-5564 announcements under another scheme id than 1: left out */
     otherSchemeAnnouncements: number;
+    /** Umbra announcements of an amount of zero, left out (bug bounty 3 Nov) */
+    zeroAmountUmbraAnnouncements?: number;
   };
   /** sha256 over everything except generatedAt and rpc stats: two scans of the same range must match */
   fingerprint: string;
@@ -107,7 +109,7 @@ export function toMarkdown(s: Summary): string {
       `${n(s.quality.unfundedAnnouncements)} ERC-5564 announcements left out because no value reached the address next to them, ` +
       `${n(s.quality.announcementAssetMismatch)} whose metadata named another asset than the one that arrived, ` +
       `${n(s.quality.announcementTokenDust)} with token dust next to them that was not counted as the payment, ` +
-      `${n(s.quality.otherSchemeAnnouncements)} under another scheme id than 1 left out.`,
+      `${n(s.quality.otherSchemeAnnouncements)} under another scheme id than 1 left out. ${n(s.quality.zeroAmountUmbraAnnouncements ?? 0)} Umbra announcements of zero left out.`,
     '',
     '## Notes',
     '',

@@ -311,6 +311,7 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
       announcementAssetMismatch: confirmed.assetMismatch,
       announcementTokenDust: confirmed.tokenDust,
       otherSchemeAnnouncements: decoded.otherScheme,
+      zeroAmountUmbraAnnouncements: decoded.zeroAmount,
     },
   };
   const summary: Summary = {
