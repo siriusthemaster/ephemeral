@@ -1,13 +1,10 @@
 # Total value unlinked: daily collector. See tvu/METHOD.md.
-# The tvu-test job (push to feat/tvu) is temporary: it never writes stats-data.
 name: tvu
 
 on:
   schedule:
     - cron: '40 0 * * *'
   workflow_dispatch:
-  push:
-    branches: [feat/tvu]
 
 env:
   RPC_ETHEREUM: ${{ vars.RPC_ETHEREUM }}
@@ -19,7 +16,6 @@ env:
 
 jobs:
   tvu:
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 340
     permissions:
@@ -51,48 +47,3 @@ jobs:
             sleep 5
           done
           exit 1
-
-  tvu-test:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    timeout-minutes: 340
-    permissions:
-      contents: read
-    concurrency:
-      group: tvu-test
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: mkdir -p data
-      - uses: actions/cache/restore@v4
-        with:
-          path: data
-          key: tvu-ckpt-${{ github.run_id }}
-          restore-keys: tvu-ckpt-
-      - name: Collect (no publish)
-        run: |
-          set -o pipefail
-          node --import tsx tvu/collect.ts --data data --budget-minutes 25 --no-publish | tee data/run.log
-      - name: Summary
-        if: always()
-        run: |
-          {
-            echo '### tvu test run'
-            grep -E '^(cross check|summary|prices|[a-z]+: )' data/run.log | tail -60 | sed 's/^/    /'
-          } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: tvu-preview
-          path: data/tvu.preview.json
-          if-no-files-found: ignore
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: data
-          key: tvu-ckpt-${{ github.run_id }}

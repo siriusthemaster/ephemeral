@@ -69,10 +69,10 @@ export async function run(o: RunOpts, d: Deps): Promise<RunResult> {
           head: heads[c.key]!,
           stop: () => d.now() > deadline,
           onRangeError: (m, span) => {
-            const key = m.slice(0, 80);
-            if (seenMsgs.size < 6 && !seenMsgs.has(key)) {
+            const key = m.slice(0, 60);
+            if (seenMsgs.size < 8 && !seenMsgs.has(key)) {
               seenMsgs.add(key);
-              d.log(`${c.key}: range of ${span} blocks refused: ${m.slice(0, 200)}`);
+              d.log(`${c.key}: range of ${span} blocks refused: ${m.slice(0, 700)}`);
             }
           },
           onProgress: () => {

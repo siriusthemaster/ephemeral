@@ -5,6 +5,8 @@
  */
 
 export class RpcError extends Error {
+  /** Which url said what, for the run log. Not part of the message so error classification is unaffected. */
+  detail = '';
   constructor(
     readonly code: number | undefined,
     message: string,
@@ -100,6 +102,11 @@ export class FallbackRpc implements Rpc {
 
   private async run(make: () => unknown, parse: (j: unknown) => unknown): Promise<unknown> {
     let last = 'no url';
+    const trace: string[] = [];
+    const withTrace = (e: RpcError): RpcError => {
+      e.detail = trace.join(' | ');
+      return e;
+    };
     let lastRange: RpcError | null = null;
     let lastPermanent: RpcError | null = null;
     for (let round = 0; round < this.rounds; round++) {
@@ -115,6 +122,7 @@ export class FallbackRpc implements Rpc {
             return out;
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
+            if (trace.length < 12) trace.push(`${url.replace(/^https:\/\//, '').slice(0, 40)}: ${msg.slice(0, 90)}`);
             if (/HTTP 40[13]|unauthorized|api key|personal token/i.test(msg)) {
               this.dead.add(url); // needs a key: never works here
               last = msg;
@@ -132,10 +140,10 @@ export class FallbackRpc implements Rpc {
           }
         }
       }
-      if (!transient && (lastRange || lastPermanent)) throw lastRange ?? lastPermanent;
+      if (!transient && (lastRange || lastPermanent)) throw withTrace((lastRange ?? lastPermanent) as RpcError);
     }
-    if (lastRange) throw lastRange;
-    throw new RpcError(undefined, `all RPC urls failed: ${last}`);
+    if (lastRange) throw withTrace(lastRange);
+    throw withTrace(new RpcError(undefined, `all RPC urls failed: ${last}`));
   }
 
   async call<T>(method: string, params: unknown[]): Promise<T> {

@@ -42,3 +42,7 @@ The collector logs the all time number of Umbra and ERC-5564 announcements it sa
 ## Limits
 
 Token balances use a fixed list and stablecoins are counted at 1 USD. A stealth address on two chains is two addresses. Public RPC endpoints can lag; the read block is 12 behind the head.
+
+## Running it
+
+`node --import tsx tvu/collect.ts --data <dir> [--budget-minutes 300] [--no-publish]`, or the `tvu` workflow (daily 00:40 UTC, or run it by hand). The first scan of all chains takes several runs on free public endpoints: progress is saved in `checkpoint.json` and the `*.addr.gz` and `*.skip.gz` files on the `stats-data` branch and the next run continues from there. Nothing about TVU is published until every chain is complete. Set the repository variables `RPC_ETHEREUM`, `RPC_ARBITRUM`, `RPC_OPTIMISM`, `RPC_POLYGON`, `RPC_BASE`, `RPC_GNOSIS` (one URL, or several separated by commas) to use your own endpoints first; a keyed endpoint makes the first scan much faster.

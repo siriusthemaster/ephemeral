@@ -65,7 +65,7 @@ export async function scanChain(rpc: Rpc, s: ChainState, o: ScanOpts): Promise<b
       }
     } catch (e) {
       if (isRangeError(e) && span > 1) {
-        o.onRangeError?.(e instanceof Error ? e.message : String(e), span);
+        o.onRangeError?.((e instanceof Error ? e.message : String(e)) + ((e as { detail?: string }).detail ? ` [${(e as { detail?: string }).detail}]` : ''), span);
         s.span = Math.max(1, Math.floor(span / 2));
         continue;
       }
