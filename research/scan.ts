@@ -36,7 +36,7 @@ import {
   type TransferPage,
   type TxLite,
 } from './lib/data.ts';
-import { confirmPayments, neededTxs } from './lib/confirm.ts';
+import { confirmPayments, neededTxs, WINDOW_BEFORE_FIRST } from './lib/confirm.ts';
 import { decodeLogs, type PaymentLog } from './lib/decode.ts';
 import { analyze, type Funding, type Payment, type Registration, type Withdrawal } from './lib/heuristics.ts';
 import { scanLogs, type RawLog } from './lib/logs.ts';
@@ -171,7 +171,10 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
   const announced = [...new Set(paymentLogs.filter((p) => p.source === 'erc5564').map((p) => p.stealth))];
   const arrivals = new KV<TransferPage>(join(dir, 'transfers-in-payment.json'), 200);
   log(`Reading what reached ${announced.length} ERC-5564 stealth addresses...`);
-  await fetchAllTransfers(rpc, announced, 'to', cfg.transferCategories, cfg.erc5564StartBlock, toBlock, arrivals, o.concurrency, 'payments received');
+  // from a day of blocks before the Announcer's first block: the first announcements look that far back for a
+  // payment sent ahead of them (confirm.ts WINDOW_BEFORE_FIRST; bug bounty 8 Nov, Znax)
+  const arrivalsFrom = cfg.erc5564StartBlock > BigInt(WINDOW_BEFORE_FIRST) ? cfg.erc5564StartBlock - BigInt(WINDOW_BEFORE_FIRST) : 0n;
+  await fetchAllTransfers(rpc, announced, 'to', cfg.transferCategories, arrivalsFrom, toBlock, arrivals, o.concurrency, 'payments received');
   // Who signed each announcement and each arrival next to a token: the payer is the signer of the announcement's
   // transaction, and only transactions signed by that payer bind a token (confirm.ts).
   const txs = new KV<TxLite>(join(dir, 'txs.json'));

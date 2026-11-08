@@ -211,6 +211,9 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
       accepted: [],
     };
     const isSmartAccount = ds.contracts.has(addr) || ds.delegated.has(addr);
+    // tokens the sender of the first payment paid in: a relayed move of one of them is the owner's (see below)
+    const firstSenders = new Set(ps.filter((p) => p.block === firstBlock && p.sender !== '').map((p) => p.sender));
+    const trusted = new Set(ps.filter((p) => p.token !== null && firstSenders.has(p.sender)).map((p) => p.token as string));
     for (const w of wBy.get(addr) ?? []) {
       // Not before the first payment, and not in its block: the scan has no transaction order inside a block, so a
       // transaction placed before the payment there would count as a withdrawal from a fresh address (F39, 30 Oct).
@@ -219,16 +222,22 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
       // self-funded address, as an H2 round trip)
       if (w.to === addr) continue;
       if (scope.asOfBlock !== undefined && w.block >= scope.asOfBlock) continue;
-      // Count only what the owner did: signed by the stealth address, an Umbra token withdrawal,
-      // a relayed move of the very token that was paid in, or ETH leaving a smart-account stealth address.
+      // Count only what the owner did: signed by the stealth address, an Umbra token withdrawal, a relayed move of a
+      // token that was paid in with the address's first payment, or ETH leaving it in a transaction it did not sign.
       // A smart account or an EIP-7702 delegated address does not make every event owned: anyone can emit a
       // Transfer log "from" it in a fake token contract, and a delegation made later would make such an
       // earlier event look owner-made (bug bounty F38). ETH cannot be faked that way, a token never paid in can.
+      // ETH that leaves without the address signing needs code at the address in that block, and only its key can
+      // give it code: owned also when the delegation was cleared before the scan's end block, where the code is read
+      // (bug bounty 8 Nov). A token paid in later by someone else can be a stranger's own dust whose contract then
+      // logs a fake move "from" the address (bug bounty 8 Nov): a relayed move counts for a token of the first payment
+      // or one the first payment's sender paid in.
+      void isSmartAccount;
       const owned =
         w.kind === 'umbra-token' ||
         w.txFrom === addr ||
-        (w.kind === 'token' && w.token !== null && v.tokens.has(w.token)) ||
-        (isSmartAccount && w.kind === 'eth');
+        (w.kind === 'token' && w.token !== null && v.tokens.has(w.token) && (v.firstOf.get(w.token) === firstBlock || trusted.has(w.token))) ||
+        w.kind === 'eth';
       if (owned) v.accepted.push(w);
     }
     out.push(v);
@@ -244,6 +253,16 @@ function registrants(ds: Dataset, scope: Scope): Set<string> {
     set.add(r.registrant);
   }
   return set;
+}
+
+const stealthSets = new WeakMap<object, { n: number; set: Set<string> }>();
+/** A contract among recipients and funders that H3 and H5 leave out (routers, bridges, hot wallets). A stealth address
+ *  with code (a smart account or a delegation) is ours to measure, not such a contract (bug bounty 8 Nov, Znax). */
+function foreignContract(ds: Dataset, a: string): boolean {
+  if (!ds.contracts.has(a)) return false;
+  let c = stealthSets.get(ds.payments);
+  if (!c || c.n !== ds.payments.length) stealthSets.set(ds.payments, (c = { n: ds.payments.length, set: new Set(ds.payments.map((p) => p.stealth)) }));
+  return !c.set.has(a);
 }
 
 function measure(ds: Dataset, scope: Scope, only?: (v: StealthView) => boolean): Measure {
@@ -315,7 +334,7 @@ function measure(ds: Dataset, scope: Scope, only?: (v: StealthView) => boolean):
           !selfTxs.has(f.txHash) &&
           f.from !== v.addr &&
           !v.senders.has(f.from) && // the payer topping up gas reveals nothing new
-          !ds.contracts.has(f.from) && // routers, bridges, exchanges' hot contracts
+          !foreignContract(ds, f.from) && // routers, bridges, exchanges' hot contracts
           (regs.has(f.from) || allDests.has(f.from)),
       );
       if (h5) m.h5++;
@@ -373,7 +392,7 @@ export function analyze(ds: Dataset, opts: AnalyzeOptions): Analysis {
     const d = [...dests][0] as string;
     // a sink nobody owns (zero, 0x…dEaD, a precompile, the system address) collects nothing: two strangers burning
     // there are not one collector (bug bounty 3 Nov)
-    if (ds.contracts.has(d) || d === v.addr || isSink(d)) continue;
+    if (foreignContract(ds, d) || d === v.addr || isSink(d)) continue;
     groups.set(d, (groups.get(d) ?? 0) + 1);
   }
   let clusteredStealth = 0;

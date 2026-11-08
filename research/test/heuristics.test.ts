@@ -78,7 +78,9 @@ test('a registrant paying the gas as the sender does not link the recipient', ()
 test('an EIP-7702 delegated stealth address may have a relayer submit its withdrawal', () => {
   const ds = dataset();
   ds.withdrawals.push({ stealth: fx.S(6), txHash: fx.h(906), block: 5_556_000, to: fx.D(8), kind: 'eth', token: null, txFrom: fx.RELAYER, txType: 4, priorityFee: '11' });
-  assert.equal(analyze(ds, opts).all.withdrawn, fx.expected.all.withdrawn, 'not owned while it is a plain EOA');
+  // ETH that left in a transaction the address did not sign needs code at the address in that block: owned also when
+  // the code read at the scan's end block shows a plain EOA (the delegation was cleared since, bug bounty 8 Nov)
+  assert.equal(analyze(ds, opts).all.withdrawn, fx.expected.all.withdrawn + 1, 'delegation cleared before the scan end');
   ds.delegated.add(fx.S(6));
   assert.equal(analyze(ds, opts).all.withdrawn, fx.expected.all.withdrawn + 1);
 });

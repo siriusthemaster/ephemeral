@@ -99,9 +99,13 @@ contract StealthBuy is IUnlockCallback {
 
         uint256 amountIn = msg.value - s.gasTip;
         uint256 ethPaid;
-        (ethPaid, tokensOut) = abi.decode(
+        (ethPaid,) = abi.decode(
             poolManager.unlock(abi.encode(CallbackData(key, amountIn, s.stealthAddress, hookData))), (uint256, uint256)
         );
+        // What arrived, not what the pool sent: a fee-on-transfer token delivers less than the swap's delta (bug bounty
+        // 8 Nov). The address held none of the token before the swap (checked above), so its balance is what arrived;
+        // the slippage guard and the announced amount both use it.
+        tokensOut = key.currency1.balanceOf(to);
         if (tokensOut < s.minOut) revert TooLittleReceived(tokensOut, s.minOut);
         _announce(s, Currency.unwrap(key.currency1), tokensOut, ethPaid);
 

@@ -211,10 +211,10 @@ const big = (v: string | number | bigint | null | undefined): bigint | null => {
   }
 };
 
-/** eth_getLogs over [from, to] in ranges of CHUNK blocks; a refused range is retried at half the size, down to MIN_CHUNK. */
-async function logsInRange(r: FundingReader, topics: (Hex | Hex[] | null)[], from: bigint, to: bigint, signal?: AbortSignal) {
+/** eth_getLogs over [from, to] in ranges of `chunk` blocks; a refused range is retried at half the size, down to MIN_CHUNK. */
+async function logsInRange(r: FundingReader, topics: (Hex | Hex[] | null)[], from: bigint, to: bigint, signal?: AbortSignal, chunk = CHUNK) {
   const logs: FundLog[] = [];
-  let size = CHUNK;
+  let size = chunk > 0n ? chunk : CHUNK;
   for (let start = from; start <= to; ) {
     if (signal?.aborted) throw new Error('aborted');
     const end = start + size - 1n < to ? start + size - 1n : to;
@@ -233,8 +233,8 @@ async function logsInRange(r: FundingReader, topics: (Hex | Hex[] | null)[], fro
  * Reads what reached each address and who sent it. ETH: the explorer's incoming transfers (when an explorer is
  * given), each confirmed on the node; EIP-7708 ETH logs where the chain has them; and, while the ETH found does not
  * account for the balance, the plain transactions to the address in the blocks around each announcement. Tokens: one
- * eth_getLogs pass for all addresses (Transfer with `to` = one of them), from FUNDING_WINDOW blocks before the first
- * announcement to the head. The ETH found must account for the balance exactly while the address has signed nothing
+ * eth_getLogs pass for all addresses (Transfer with `to` = one of them), from the Announcer's start (`startBlock`) to
+ * the head: the FUNDING_WINDOW blocks before the first announcement and everything older. The ETH found must account for the balance exactly while the address has signed nothing
  * (nonce 0); after that only an explorer can list what reached it, so without one the payers stay unknown.
  */
 export async function readFunding(
@@ -267,15 +267,24 @@ export async function readFunding(
       const k = topicAddr(t);
       logsBy.set(k, [...(logsBy.get(k) ?? []), l]);
     };
+    // The window, and every block before it from the Announcer's start too (bug bounty 30 Oct and 7 Nov, as in the
+    // client since 0.2.11): a token can reach the address any time before an announcement names it, and one read from
+    // the window only was missing with its payer while the payers still read as known. The older range is asked in
+    // one piece first and split while the node refuses it.
+    const ranges: [bigint, bigint, bigint][] = [[from, head, CHUNK]];
+    if (from > opts.startBlock) ranges.unshift([opts.startBlock, from - 1n, from - opts.startBlock]);
+    const read = async (topics: (Hex | Hex[] | null)[], toAt: number) => {
+      for (const [f, t, c] of ranges) for (const l of await logsInRange(reader, topics, f, t, opts.signal, c)) keep(l, toAt);
+    };
     for (const kind of kinds)
       for (let i = 0; i < qs.length; i += PER_QUERY) {
         const group = qs.slice(i, i + PER_QUERY).map((q) => pad(q.address));
         try {
-          for (const l of await logsInRange(reader, kind.topics(group.length === 1 && group[0] ? group[0] : group), from, head, opts.signal)) keep(l, kind.toAt);
+          await read(kind.topics(group.length === 1 && group[0] ? group[0] : group), kind.toAt);
         } catch {
           for (const one of group) {
             try {
-              for (const l of await logsInRange(reader, kind.topics(one), from, head, opts.signal)) keep(l, kind.toAt);
+              await read(kind.topics(one), kind.toAt);
             } catch {
               logsUnread.add(topicAddr(one));
             }

@@ -6,8 +6,9 @@
  *   <chain>.addr.gz      20 byte addresses, sorted, gzip
  *   <chain>.skip.gz      8 byte hash prefixes (sha256) of addresses to leave out, sorted, gzip
  *
- * The skip file exists so that an address announced by an excluded router can never be counted, even if a third
- * party announces the same address later. It holds hash prefixes, not addresses, and no count of it is published.
+ * The skip file records the addresses an excluded router announced. It holds hash prefixes, not addresses, and no count
+ * of it is published. It no longer takes an address out of the number (bug bounty 8 Nov: anyone could make a router
+ * announce somebody else's address and erase it for good): an address counts once anyone but a router announced it.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';

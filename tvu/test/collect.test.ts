@@ -26,10 +26,11 @@ const opts = (d: string, extra = {}) => ({ dataDir: d, budgetMs: 60_000, publish
 function world(): MockChain {
   const m = new MockChain();
   m.head = 500;
-  const A = addr(0xa1), B = addr(0xa2), C = addr(0xa3), D = addr(0xa4), W = addr(0xa5), E = addr(0xe1);
+  const A = addr(0xa1), B = addr(0xa2), C = addr(0xa3), D = addr(0xa4), W = addr(0xa5), E = addr(0xe1), F = addr(0xe2);
   m.logs.push(umbraLog(A, 120), umbraLog(B, 250), annLog(C, addr(0x77), 300), annLog(D, addr(0x78), 310), annLog(W, addr(0x79), 320));
-  // ephemeral router announcement for E, then a stranger announces E again: E must stay out
-  m.logs.push(annLog(E, ROUTER, 330), annLog(E, addr(0x99), 340));
+  // ephemeral router announcement for E, then a stranger announces E again: E counts (bug bounty 8 Nov: a router
+  // announcement no longer erases an address someone else announced). F is announced by the router only: never counted.
+  m.logs.push(annLog(E, ROUTER, 330), annLog(E, addr(0x99), 340), annLog(F, ROUTER, 345));
   m.eth.set(A, 1n * ETH); // 2000 USD
   m.usdc.set(B, 500_000_000n); // 500 USD
   m.eth.set(C, 1n * ETH); // contract, excluded
@@ -37,24 +38,25 @@ function world(): MockChain {
   m.eth.set(D, 1n * ETH); // nonce too high, excluded
   m.nonces.set(D, 1001);
   m.eth.set(W, 300n * ETH); // whale, excluded
-  m.eth.set(E, 50n * ETH); // ephemeral, never counted
+  m.eth.set(E, 1n * ETH); // 2000 USD: announced by someone else too, counted
+  m.eth.set(F, 50n * ETH); // router only, never counted
   m.umbraUsdc = 70_000_000n; // 70 USD pending
   return m;
 }
 
-test('routers are excluded for good, filters drop contracts, nonce and whales', async () => {
+test('router-only addresses stay out, filters drop contracts, nonce and whales', async () => {
   const d = dir();
   const r = await run(opts(d), deps(world()));
   assert.ok(r.published);
   const t = r.tvu!;
-  assert.equal(t.parts.stealthNative, 2000);
+  assert.equal(t.parts.stealthNative, 4000);
   assert.equal(t.parts.stealthTokens, 500);
   assert.equal(t.parts.umbraPendingTokens, 70);
-  assert.equal(t.totalUsd, 2570);
+  assert.equal(t.totalUsd, 4570);
   assert.equal(t.excludedOutliers.count, 3);
   assert.equal(t.excludedOutliers.usd, 2000 + 2000 + 600_000);
-  // E (50 ETH) is nowhere: not in the total and not among the outliers
-  assert.equal(t.byChain.ethereum!.addresses, 5);
+  // F (50 ETH) is nowhere: not in the total and not among the outliers
+  assert.equal(t.byChain.ethereum!.addresses, 6);
   assert.equal(t.label, 'all protocols combined');
   const text = readFileSync(join(d, 'tvu.json'), 'utf8');
   assert.ok(!/0xeed50c|0x231191/i.test(text));
@@ -85,7 +87,7 @@ test('range errors shrink the range and the scan still completes', async () => {
   const r = await run(opts(dir()), deps(m));
   assert.ok(r.published);
   assert.ok(m.stats.rangeErrors > 0);
-  assert.equal(r.tvu!.totalUsd, 2570);
+  assert.equal(r.tvu!.totalUsd, 4570);
 });
 
 test('budget end saves progress and publishes nothing, next run resumes', async () => {
