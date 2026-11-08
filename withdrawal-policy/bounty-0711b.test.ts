@@ -145,3 +145,54 @@ test('funding: a Transfer of zero and an ERC-1155 move of zero make no payer and
   const g = (await readFunding(reader(one), [{ address: S, announcements: [{ txHash: hx(1), caller: PAYER, blockNumber: 100n }] }], { startBlock: 0n }))[S.toLowerCase()]!;
   assert.equal(g.payers.includes(STRANGER.toLowerCase() as Hex), true);
 });
+
+// Bug bounty 8 Nov: getCode with no answer is unread (counts as code); the code a destination had when the ETH arrived
+// counts too (a cleared EIP-7702 forwarder); H1 compares registrants de-aliased; a zero token address cannot be checked.
+function explorerAt(to: Hex, block: number) {
+  globalThis.fetch = (async (u: string) => {
+    const p = new URL(u).pathname.toLowerCase();
+    if (p.endsWith(`/addresses/${S}/transactions`))
+      return json({ items: [{ hash: `0x${'c4'.repeat(32)}`, from: { hash: S }, to: { hash: to }, value: '1000000000000000000', raw_input: '0x', block_number: block }], next_page_params: null });
+    return json({ items: [], next_page_params: null });
+  }) as typeof fetch;
+}
+const nodeAt = (code: (a: string, b?: bigint) => string | null): TokenLogCheck => ({
+  node: { blockNumber: async () => 1000n, getLogs: async () => [], getCode: async (a, b) => code(a.toLowerCase(), b) },
+  fromBlock: 0n,
+});
+
+test('H3: getCode answering null is unread, so the history is incomplete', async () => {
+  explorerAt(EOA, 500);
+  const r = await loadWithdrawalHistory({ blockscout: 'https://x/api/v2' }, [S], undefined, { [S]: 1 }, nodeAt((a) => (a === EOA ? null : '0x')));
+  assert.equal(r.ok, false);
+});
+
+test('H3: a destination that had code when the ETH arrived and cleared it later: history incomplete', async () => {
+  explorerAt(EOA, 500);
+  const cleared = nodeAt((a, b) => (a === EOA && b === 500n ? '0xef0100' + 'ab'.repeat(20) : '0x'));
+  assert.equal((await loadWithdrawalHistory({ blockscout: 'https://x/api/v2' }, [S], undefined, { [S]: 1 }, cleared)).ok, false);
+  // control: no code then and now: complete; an old block the node cannot answer falls back to the code now
+  assert.equal((await loadWithdrawalHistory({ blockscout: 'https://x/api/v2' }, [S], undefined, { [S]: 1 }, nodeAt(() => '0x'))).ok, true);
+  const pruned = nodeAt((a, b) => (b !== undefined && a === EOA ? (() => { throw new Error('missing trie node'); })() : '0x'));
+  assert.equal((await loadWithdrawalHistory({ blockscout: 'https://x/api/v2' }, [S], undefined, { [S]: 1 }, pruned)).ok, true);
+});
+
+test('H1: a registrant recorded under its OP deposit alias blocks its L1 address; a zero token address blocks', () => {
+  const alias = (a: string) => `0x${((BigInt(a) + 0x1111000000000000000000000000000000001111n) % (1n << 160n)).toString(16).padStart(40, '0')}` as Hex;
+  assert.equal(line({ destination: REG, registrants: [alias(REG)] }, 'H1')?.level, 'block');
+  assert.equal(line({ isToken: true, gasFrom: [], tokenAddress: '0x0000000000000000000000000000000000000000' as Hex }, 'token')?.level, 'block');
+});
+
+test('H2: a spent address (nonce 1) whose explorer lists only an older payer is not fully known (bug bounty 8 Nov)', async () => {
+  const P1 = '0x1212121212121212121212121212121212121212' as Hex;
+  const r: FundingReader = {
+    ...reader([]),
+    balance: async () => 3n * 10n ** 18n,
+    nonce: async () => 1,
+    tx: async (hash) => (hash === hx(1) ? { from: P1, to: S, value: 10n * 10n ** 18n, blockNumber: 100n } : null),
+    explorer: async () => [{ tx: hx(1), from: P1, value: 10n * 10n ** 18n, internal: false }],
+  } as FundingReader;
+  const f = (await readFunding(r, [{ address: S, announcements: [{ txHash: hx(1), caller: P1, blockNumber: 100n }] }], { startBlock: 0n }))[S.toLowerCase()]!;
+  assert.equal(f.payersKnown, false);
+  assert.equal(f.gap, 'spent');
+});

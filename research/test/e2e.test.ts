@@ -71,6 +71,8 @@ for (const r of fx.registrations) {
 }
 
 for (const p of fx.payments) txs.set(p.tx, { hash: p.tx, from: p.sender, type: '0x2', maxPriorityFeePerGas: '0x3b9aca00' });
+// every funding is a mined transaction too (the scan may ask for its signer, bug bounty 8 Nov)
+for (const f of fx.fundings) if (!txs.has(f.tx)) txs.set(f.tx, { hash: f.tx, from: f.from, type: '0x2', maxPriorityFeePerGas: '0x3b9aca00' });
 for (const w of fx.withdrawals) {
   txs.set(w.tx, { hash: w.tx, from: w.txFrom, type: hex(w.type), ...(w.fee && w.type >= 2 ? { maxPriorityFeePerGas: hex(BigInt(w.fee)) } : { gasPrice: '0x1' }) });
 }

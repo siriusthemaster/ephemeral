@@ -18,9 +18,9 @@ export type LogFetcher = (q: { fromBlock: bigint; toBlock: bigint; topics: (Hex 
 /** The node the token transfers are read from directly, not through the explorer. Injectable, so tests need no node.
  * `getCode`: contract code at an address ('0x' = none), for an ETH send to a contract and for a payment address that
  * has code itself (an EIP-7702 delegation or a smart account). Without it such sends cannot be followed. */
-export type NodeReader = { getLogs: LogFetcher; blockNumber: () => Promise<bigint>; getCode?: (address: Hex) => Promise<string | null | undefined> };
+export type NodeReader = { getLogs: LogFetcher; blockNumber: () => Promise<bigint>; getCode?: (address: Hex, block?: bigint) => Promise<string | null | undefined> };
 /** Code at an address: '0x' = none, null = could not be read. */
-type CodeOf = (address: string) => Promise<string | null>;
+type CodeOf = (address: string, block?: bigint) => Promise<string | null>;
 const hasCode = (c: string) => /^0x([0-9a-f]{2})+$/i.test(c);
 /**
  * Token transfers sent from each address, read straight from the node: ERC-20 (and ERC-721) Transfer logs and ERC-1155
@@ -35,7 +35,7 @@ export type TokenLogCheck = {
 };
 
 type Ref = { hash?: string } | null | undefined;
-type BsTx = { hash?: string | null; from?: Ref; to?: Ref; value?: string | null; raw_input?: string | null };
+type BsTx = { hash?: string | null; from?: Ref; to?: Ref; value?: string | null; raw_input?: string | null; block_number?: number | string | null };
 type BsTokenTransfer = {
   from?: Ref;
   to?: Ref;
@@ -198,7 +198,12 @@ async function sentBy(
       // splitter, a delegated EOA), and where it went cannot be read from the send. The recipient still counts; code
       // that cannot be read counts as code.
       const code = codeOf ? await codeOf(t.to.hash) : null;
-      if (code === null || hasCode(code)) unattributed++;
+      // the code it had when the ETH arrived counts too: an EIP-7702 delegation that forwarded the ETH can be cleared
+      // later (bug bounty 8 Nov). A node without that old state cannot answer; then the code now decides.
+      const at = typeof t.block_number === 'number' || (typeof t.block_number === 'string' && /^\d+$/.test(t.block_number)) ? BigInt(t.block_number) : null;
+      const then = codeOf && at !== null && code !== null && !hasCode(code) ? await codeOf(t.to.hash, at) : null;
+      if (then !== null && hasCode(then)) unattributed++;
+      else if (code === null || hasCode(code)) unattributed++;
     }
   }
   for (const t of calls) {
@@ -297,7 +302,7 @@ export function jsonRpcNode(url: string): NodeReader {
     blockNumber: async () => BigInt((await call('eth_blockNumber', [])) as string),
     getLogs: async (q) =>
       (await call('eth_getLogs', [{ fromBlock: hex(q.fromBlock), toBlock: hex(q.toBlock), topics: q.topics }])) as RpcLog[],
-    getCode: async (address) => (await call('eth_getCode', [address, 'latest'])) as string,
+    getCode: async (address, block) => (await call('eth_getCode', [address, block === undefined ? 'latest' : `0x${block.toString(16)}`])) as string,
   };
 }
 
@@ -355,15 +360,15 @@ export async function loadWithdrawalHistory(
   if (latest === null) ok = false;
   // contract code from the node, read once per address; null = could not be read
   const codes = new Map<string, Promise<string | null>>();
-  const codeOf: CodeOf = (x) => {
-    const k = x.toLowerCase();
+  const codeOf: CodeOf = (x, block) => {
+    const k = `${x.toLowerCase()}@${block ?? 'latest'}`;
     if (!codes.has(k))
       codes.set(
         k,
         tokenLogs && typeof tokenLogs.node.getCode === 'function'
           ? tokenLogs.node
-              .getCode(k as Hex)
-              .then((c) => (typeof c === 'string' ? c : c === undefined || c === null ? '0x' : null))
+              .getCode(x.toLowerCase() as Hex, block)
+              .then((c) => (typeof c === 'string' ? c : null)) // no answer is unread, not "no code" (bug bounty 8 Nov)
               .catch(() => null)
           : Promise.resolve(null),
       );

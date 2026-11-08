@@ -97,7 +97,7 @@ export function withdrawChecks(g: GuardInput): Check[] {
   if (g.isToken && same(g.destination, g.tokenAddress))
     return [{ id: 'burn', level: 'block', text: 'That is the token contract itself. Tokens sent there are lost for good.' }];
   // fail closed like every other input (bug bounty 3 Nov): without the token contract the check above cannot run
-  if (g.isToken && (typeof g.tokenAddress !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(g.tokenAddress)))
+  if (g.isToken && (typeof g.tokenAddress !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(g.tokenAddress) || /^0x0{40}$/.test(g.tokenAddress)))
     out.push({ id: 'token', level: 'block', text: 'Cannot check, token contract unknown. Withdraw stays locked until it is known.' });
   if (!isAddress(g.destination)) return [{ id: 'addr', level: 'block', text: 'Enter a valid Ethereum address.' }];
   if (same(g.destination, g.stealthAddress)) out.push({ id: 'self', level: 'block', text: 'That is the payment address itself.' });
@@ -109,7 +109,7 @@ export function withdrawChecks(g: GuardInput): Check[] {
       level: 'block',
       text: 'H1: this is the wallet that created your stealth keys. Withdrawing here links the payment to you directly.',
     });
-  else if (Array.isArray(g.registrants) && g.registrants.some((r) => same(g.destination, r)))
+  else if (Array.isArray(g.registrants) && withL1(g.registrants.filter((r): r is Hex => typeof r === 'string')).some((r) => same(g.destination, r)))
     out.push({
       id: 'H1',
       level: 'block',

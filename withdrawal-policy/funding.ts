@@ -119,7 +119,9 @@ export type Funding = {
   assetsRead: boolean;
 };
 
-export type FundingTx = { from: string; to?: string | null; value: bigint; blockNumber?: bigint | null };
+export type FundingTx = { from: string; to?: string | null; value: bigint; blockNumber?: bigint | null; nonce?: number | null };
+/** A mined transaction's receipt: its status, what it cost its sender (gas used times the price paid, blob gas too) and its logs. */
+export type FundingReceipt = { success: boolean; fee: bigint; logs: FundLog[] };
 /** Incoming ETH an explorer lists for an address: plain transactions to it, and internal transfers to it. */
 export type ExplorerIn = { tx: Hex; from: string; value: bigint; internal: boolean };
 /** A log as eth_getLogs returns it (viem's formatted logs fit too). */
@@ -148,6 +150,14 @@ export type FundingReader = {
   tokenBalance: (token: Hex, holder: Hex) => Promise<bigint>;
   /** Incoming ETH from an explorer. Left out = no explorer (Blockscout off); a throw = could not be read. */
   explorer?: ((address: Hex, signal?: AbortSignal) => Promise<ExplorerIn[]>) | null;
+  /**
+   * The hashes of the transactions the address signed, from an explorer (client 0.2.11, here since the bug bounty of
+   * 8 Nov). Once an address has sent anything, what reached it is known only when everything in and out adds up to its
+   * balance exactly. Left out or a throw = not read, and the payers of a spent address stay unknown (H2 blocks).
+   */
+  explorerOut?: ((address: Hex, signal?: AbortSignal) => Promise<Hex[]>) | null;
+  /** A transaction's receipt. null or a throw = not read. */
+  receipt?: (hash: Hex) => Promise<FundingReceipt | null>;
 };
 
 export type FundingQuery = {
@@ -382,9 +392,41 @@ export async function readFunding(
       }
     }
 
+    // What left the address (0.2.11). Once it has signed a transaction, the ETH that reached it must equal its balance
+    // plus what left: the value of every successful transaction it signed and the fee of every one, with each nonce
+    // below its own found exactly once. Before, "at least the balance" was enough, so a payment that arrived after a
+    // withdrawal and that a lagging explorer did not list yet left its payer out of H2.
+    let left: bigint | null = null;
+    if (nonce !== null && nonce > 0 && reader.explorerOut && reader.receipt) {
+      try {
+        const hashes = await reader.explorerOut(q.address, opts.signal);
+        const nonces = new Set<number>();
+        const done = new Set<string>();
+        let total = 0n;
+        let whole = true;
+        for (const h of hashes) {
+          if (!isHash(h) || done.has(h.toLowerCase())) continue;
+          done.add(h.toLowerCase());
+          const t = await txOf(h);
+          if (!t || !isAddr(t.from) || low(t.from) !== a) continue; // not signed by this address
+          const rc = await reader.receipt(h).catch(() => null);
+          const n = t.nonce;
+          if (!rc || typeof rc.fee !== 'bigint' || t.blockNumber === null || t.blockNumber === undefined || typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0 || n >= nonce || nonces.has(n)) {
+            whole = false;
+            break;
+          }
+          nonces.add(n);
+          total += rc.fee + (rc.success ? t.value : 0n);
+        }
+        if (whole && nonces.size === nonce) left = total;
+      } catch {
+        left = null;
+      }
+    }
+
     // 3. ETH not accounted for yet: plain transactions to the address in the blocks around each announcement
     const sum = () => eth.reduce((s, e) => s + e.value, 0n);
-    const accounted = () => balance !== null && nonce !== null && (nonce === 0 ? sum() === balance : eth.length > 0 && sum() >= balance);
+    const accounted = () => balance !== null && nonce !== null && (nonce === 0 ? sum() === balance : left !== null && sum() - left === balance);
     if (head !== null && balance !== null && nonce !== null && !accounted()) {
       const blocks: bigint[] = [];
       for (const x of q.announcements) for (const n of blockOrder(x.blockNumber, head)) if (!blocks.includes(n)) blocks.push(n);
@@ -452,13 +494,13 @@ export async function readFunding(
     const ethOk =
       balance !== null &&
       nonce !== null &&
-      (nonce === 0 ? sum() === balance : explorerOk && eth.length > 0 && sum() >= balance);
+      (nonce === 0 ? sum() === balance : explorerOk && left !== null && sum() - left === balance);
     const logsOk = head !== null && !logsUnread.has(a);
     let gap: FundingGap | null = null;
     if (head === null || balance === null || nonce === null) gap = 'unread';
     else if (!logsOk) gap = 'logs';
     else if (senderGap) gap = 'sender';
-    else if (!ethOk) gap = nonce > 0 && !explorerOk ? 'spent' : 'eth';
+    else if (!ethOk) gap = nonce > 0 ? 'spent' : 'eth';
     else if (tokenGap) gap = 'token';
     else if (!arrived) gap = 'nothing';
     return {
