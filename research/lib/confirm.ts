@@ -95,19 +95,33 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
   // Announcements are read in chain order. The long look-back belongs to the first announcement of an address until
   // one of them is funded: a stranger's earlier announcement that ends unfunded no longer shortens the real one's
   // window (bug bounty 8 Nov). After a funded one, a later announcement looks 2 blocks back, so ETH topped up for gas
-  // is not read as a new payment. Results keep the input order.
+  // is not read as a new payment. What arrived before that funded announcement and stayed unclaimed, from a signer
+  // other than its own, is still in reach of a later one (bug bounty 8 Nov, afternoon: a stranger who funded his own
+  // earlier announcement with 1 wei or a dust token still shortened the real one's window and hid the payment). The
+  // payer's own gas next to its funded announcement stays out. Results keep the input order.
   const order = logs
     .map((p, i) => ({ p, i }))
     .sort((x, y) => x.p.blockNumber - y.p.blockNumber || x.p.logIndex - y.p.logIndex || x.i - y.i);
-  const fundedAt = new Map<string, number>();
+  const fundedAt = new Map<string, { block: number; payer: string | undefined }>();
+  const claimed = (t: TransferLite, stealth: string) => seen.has(`${t.hash}|${stealth}|${t.token ?? 'eth'}`);
   const byIndex = new Map<number, PaymentLog[]>();
   for (const { p, i } of order) {
     if (p.source !== 'erc5564') {
       byIndex.set(i, [p]);
       continue;
     }
-    const firstFunded = fundedAt.get(p.stealth);
-    const arrived = arrivals(p, incoming, firstFunded !== undefined && firstFunded < p.blockNumber ? WINDOW_BEFORE : WINDOW_BEFORE_FIRST);
+    const first = fundedAt.get(p.stealth);
+    let arrived: TransferLite[];
+    if (first !== undefined && first.block < p.blockNumber) {
+      arrived = arrivals(p, incoming, WINDOW_BEFORE);
+      if (first.payer !== undefined) {
+        const older = arrivals(p, incoming, WINDOW_BEFORE_FIRST).filter((t) => {
+          const by = senderOf(t.hash);
+          return t.block < first.block && !claimed(t, p.stealth) && by !== undefined && by !== first.payer && !arrived.includes(t);
+        });
+        arrived = [...older, ...arrived];
+      }
+    } else arrived = arrivals(p, incoming, WINDOW_BEFORE_FIRST);
     const allTokens = arrived.filter((t) => !ETH_CATEGORIES.has(t.category) && t.token !== null);
     const eth = arrived.filter((t) => ETH_CATEGORIES.has(t.category));
     // Metadata that names no token (too short, an unknown selector, or a token selector without the token) cannot
@@ -128,10 +142,17 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
     // A token bound only by its name can also come from a stranger (the same token, any amount): when the payer
     // signed a transfer of it, only those count (bug bounty 4 Nov, P4c).
     const signedBound = payer === undefined ? [] : bound.filter((t) => byPayer(t.hash) || payerEth.some((e) => e.hash === t.hash));
+    // Bound by its name only, not signed by the payer (a relayer moved it, or a stranger sent it): when the token's own
+    // log names the payer as its sender (a permit or transferWithAuthorization relay), only those (bug bounty 8 Nov:
+    // a stranger's dust of the same token became a second payment). The log narrows here, it never binds.
+    const nameBound = bound.some((t) => payer !== undefined && t.from === payer) ? bound.filter((t) => t.from === payer) : bound;
     const namesToken = p.asset === 'TOKEN' && p.token !== null;
     let tokens: TransferLite[];
     if (signedBound.length > 0) tokens = signedBound;
-    else if (bound.length > 0) tokens = bound;
+    // the payer's own ETH, not yet another announcement's payment, beats a token bound only by its name (bug bounty
+    // 8 Nov: one unit of the named token from anyone took over a payment the payer made in ETH)
+    else if (payer !== undefined && payerEth.some((e) => !claimed(e, p.stealth))) tokens = [];
+    else if (bound.length > 0) tokens = nameBound;
     else if (payer === undefined ? eth.length > 0 : payerEth.length > 0) tokens = []; // unknown payer: any ETH, as before 6 Nov
     else if (namesToken && payer !== undefined && eth.every((e) => senderOf(e.hash) !== undefined)) {
       // The announcement names a token that never arrived and its payer sent nothing (every ETH signer known, none the
@@ -148,7 +169,7 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
       continue;
     }
     const picked = asset === 'TOKEN' ? tokens : eth;
-    if (!fundedAt.has(p.stealth)) fundedAt.set(p.stealth, p.blockNumber);
+    if (!fundedAt.has(p.stealth)) fundedAt.set(p.stealth, { block: p.blockNumber, payer });
     const out: PaymentLog[] = [];
     byIndex.set(i, out);
     const claimedOther =
