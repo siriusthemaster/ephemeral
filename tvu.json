@@ -1,0 +1,51 @@
+{
+ "schema": 1,
+ "asOf": "2026-11-08T10:15:47Z",
+ "label": "all protocols combined",
+ "totalUsd": 235336.6,
+ "parts": {
+  "stealthNative": 206591.68,
+  "stealthTokens": 735.23,
+  "umbraPendingTokens": 28009.69
+ },
+ "byChain": {
+  "ethereum": {
+   "usd": 125914.56,
+   "addresses": 25765
+  },
+  "arbitrum": {
+   "usd": 45945.44,
+   "addresses": 100211
+  },
+  "optimism": {
+   "usd": 45415.05,
+   "addresses": 72279
+  },
+  "polygon": {
+   "usd": 14963.65,
+   "addresses": 102541
+  },
+  "base": {
+   "usd": 3036.13,
+   "addresses": 8598
+  },
+  "gnosis": {
+   "usd": 61.78,
+   "addresses": 204
+  }
+ },
+ "prices": {
+  "ETH": 2232.62,
+  "POL": 0.0899
+ },
+ "rules": {
+  "maxNonce": 1000,
+  "maxEthEquivalent": 250,
+  "excludeContracts": true
+ },
+ "excludedOutliers": {
+  "count": 2,
+  "usd": 2
+ },
+ "method": "https://github.com/siriusthemaster/ephemeral/blob/main/tvu/METHOD.md"
+}
