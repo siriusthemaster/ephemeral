@@ -20,20 +20,44 @@ export const CALLS_PER_BATCH = 500;
 
 type Call = { target: string; callData: `0x${string}` };
 
-/** Run calls through Multicall3.aggregate3 in batches. Failed sub calls come back as null. */
+/** A node refused a batch for its size: execution time or gas cap (public Arbitrum nodes stop eth_call after 5 s). */
+const TOO_HEAVY = /timeout|timed out|aborted|out of gas|gas limit|gas cap|exceed|too large|response size/i;
+const MIN_BATCH = 10;
+
+/** Run calls through Multicall3.aggregate3 in batches. Failed sub calls come back as null. A batch a node refuses as
+ *  too heavy is split in half (down to MIN_BATCH calls) and the smaller size is kept for the rest (7 Nov: one Arbitrum
+ *  batch of 500 calls hit the 5 s execution limit on every public endpoint and the run failed). */
 export async function multicall(rpc: Rpc, calls: Call[], block: string, perBatch = CALLS_PER_BATCH): Promise<(`0x${string}` | null)[]> {
   const out: (`0x${string}` | null)[] = [];
-  for (let i = 0; i < calls.length; i += perBatch) {
-    const slice = calls.slice(i, i + perBatch);
+  let size = perBatch;
+  const run = async (slice: Call[]): Promise<void> => {
     const data = encodeFunctionData({
       abi: ABI,
       functionName: 'aggregate3',
       args: [slice.map((c) => ({ target: c.target as `0x${string}`, allowFailure: true, callData: c.callData }))],
     });
-    const raw = await rpc.call<`0x${string}`>('eth_call', [{ to: MULTICALL3, data }, block]);
+    let raw: `0x${string}`;
+    try {
+      raw = await rpc.call<`0x${string}`>('eth_call', [{ to: MULTICALL3, data }, block]);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (slice.length <= MIN_BATCH || !TOO_HEAVY.test(msg)) throw e;
+      size = Math.min(size, Math.ceil(slice.length / 2));
+      for (let j = 0; j < slice.length; ) {
+        const part = slice.slice(j, j + size);
+        await run(part);
+        j += part.length;
+      }
+      return;
+    }
     const res = decodeFunctionResult({ abi: ABI, functionName: 'aggregate3', data: raw }) as readonly { success: boolean; returnData: `0x${string}` }[];
     if (res.length !== slice.length) throw new Error('multicall answer has the wrong length');
     for (const r of res) out.push(r.success ? r.returnData : null);
+  };
+  for (let i = 0; i < calls.length; ) {
+    const slice = calls.slice(i, i + size);
+    await run(slice);
+    i += slice.length;
   }
   return out;
 }
