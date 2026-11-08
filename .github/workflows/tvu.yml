@@ -35,15 +35,23 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Collect
-        run: node --import tsx tvu/collect.ts --data data --budget-minutes 300
+        # tvu.json is written only when the repository variable TVU_PUBLISH is 1 (the number is approved first);
+        # until then the run log carries the summary line.
+        run: node --import tsx tvu/collect.ts --data data --budget-minutes 300 ${{ vars.TVU_PUBLISH == '1' && ' ' || '--no-publish' }}
       - name: Commit to stats-data
+        # also after a failed or timed out Collect: the scan checkpoint is saved, so the next run resumes
+        if: always()
         run: |
           cd data
+          # identity for the commit and for the rebase onto a newer stats-data (another job may push sector.json meanwhile)
+          git config user.name siriusthemaster
+          git config user.email 210255227+siriusthemaster@users.noreply.github.com
           for f in tvu.json checkpoint.json *.addr.gz *.skip.gz; do [ -e "$f" ] && git add "$f"; done
           if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
-          git -c user.name=siriusthemaster -c user.email=210255227+siriusthemaster@users.noreply.github.com commit -m "tvu: daily update"
+          git commit -m "tvu: daily update"
           for i in 1 2 3; do
             git pull --rebase origin stats-data && git push origin HEAD:stats-data && exit 0
+            git rebase --abort 2>/dev/null || true
             sleep 5
           done
           exit 1
