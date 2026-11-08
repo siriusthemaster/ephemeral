@@ -7,8 +7,9 @@
  * token's real H2 or H5 link (primaryAsset picks ETH first).
  *
  * So a payment is what actually reached the stealth address next to its announcement: the announcement block and the
- * 12 blocks after it, and before it the 2 blocks the client's funding.ts also reads. Before the first announcement of
- * an address the window reaches back a day (7,200 blocks): nobody but the payer can know a fresh stealth address
+ * 12 blocks after it, and before it the 2 blocks the client's funding.ts also reads. Until an announcement of an
+ * address is funded, each one's window reaches back a day (7,200 blocks; bug bounty 8 Nov: before, only the earliest
+ * announcement had it, so a stranger announcing first shortened the real one): nobody but the payer can know a fresh stealth address
  * before it is announced, and payers often send first and announce a few blocks later (mainnet has payments 4 and 6
  * blocks ahead of their announcement). The asset is what arrived:
  *   - a token transfer in that window makes it a token payment; ETH that arrives with it is gas, not the payment;
@@ -62,33 +63,25 @@ export type SenderOf = (txHash: string) => string | undefined;
 
 type Incoming = (stealth: string) => readonly TransferLite[] | undefined;
 
-function windowFor(logs: readonly PaymentLog[]): (p: PaymentLog, incoming: Incoming) => TransferLite[] {
-  const firstAnnounced = new Map<string, number>();
-  for (const p of logs) {
-    if (p.source === 'erc5564') firstAnnounced.set(p.stealth, Math.min(p.blockNumber, firstAnnounced.get(p.stealth) ?? Infinity));
-  }
-  return (p, incoming) => {
-    const before = p.blockNumber === firstAnnounced.get(p.stealth) ? WINDOW_BEFORE_FIRST : WINDOW_BEFORE;
-    return (incoming(p.stealth) ?? []).filter(
-      (t) =>
-        t.to === p.stealth &&
-        t.from !== p.stealth &&
-        t.block >= p.blockNumber - before &&
-        t.block <= p.blockNumber + WINDOW_AFTER,
-    );
-  };
+/** Arrivals at the stealth address from `before` blocks ahead of the announcement to WINDOW_AFTER blocks after it. */
+function arrivals(p: PaymentLog, incoming: Incoming, before: number): TransferLite[] {
+  return (incoming(p.stealth) ?? []).filter(
+    (t) => t.to === p.stealth && t.from !== p.stealth && t.block >= p.blockNumber - before && t.block <= p.blockNumber + WINDOW_AFTER,
+  );
 }
 
-/** Transactions whose signer confirmPayments needs: each ERC-5564 announcement's own, and the arrivals next to it
- *  when a token arrived (the only case where binding decides anything). */
+/** Transactions whose signer confirmPayments needs: each ERC-5564 announcement's own, and the arrivals in its longest
+ *  possible window when a token arrived there or the announcement names a token (binding, and whether the payer's
+ *  own ETH arrived, decide those; bug bounty 8 Nov: without the ETH signers a payment named as a token but paid in
+ *  ETH was dropped). */
 export function neededTxs(logs: readonly PaymentLog[], incoming: Incoming): string[] {
-  const arrivedFor = windowFor(logs);
   const out = new Set<string>();
   for (const p of logs) {
     if (p.source !== 'erc5564') continue;
     out.add(p.txHash);
-    const arrived = arrivedFor(p, incoming);
-    if (arrived.some((t) => !ETH_CATEGORIES.has(t.category) && t.token !== null)) for (const t of arrived) out.add(t.hash);
+    const arrived = arrivals(p, incoming, WINDOW_BEFORE_FIRST);
+    const tokenArrived = arrived.some((t) => !ETH_CATEGORIES.has(t.category) && t.token !== null);
+    if (tokenArrived || (p.asset === 'TOKEN' && p.token !== null)) for (const t of arrived) out.add(t.hash);
   }
   return [...out];
 }
@@ -99,13 +92,22 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
   let unfunded = 0;
   let assetMismatch = 0;
   let tokenDust = 0;
-  const arrivedFor = windowFor(logs);
-  for (const p of logs) {
+  // Announcements are read in chain order. The long look-back belongs to the first announcement of an address until
+  // one of them is funded: a stranger's earlier announcement that ends unfunded no longer shortens the real one's
+  // window (bug bounty 8 Nov). After a funded one, a later announcement looks 2 blocks back, so ETH topped up for gas
+  // is not read as a new payment. Results keep the input order.
+  const order = logs
+    .map((p, i) => ({ p, i }))
+    .sort((x, y) => x.p.blockNumber - y.p.blockNumber || x.p.logIndex - y.p.logIndex || x.i - y.i);
+  const fundedAt = new Map<string, number>();
+  const byIndex = new Map<number, PaymentLog[]>();
+  for (const { p, i } of order) {
     if (p.source !== 'erc5564') {
-      payments.push(p);
+      byIndex.set(i, [p]);
       continue;
     }
-    const arrived = arrivedFor(p, incoming);
+    const firstFunded = fundedAt.get(p.stealth);
+    const arrived = arrivals(p, incoming, firstFunded !== undefined && firstFunded < p.blockNumber ? WINDOW_BEFORE : WINDOW_BEFORE_FIRST);
     const allTokens = arrived.filter((t) => !ETH_CATEGORIES.has(t.category) && t.token !== null);
     const eth = arrived.filter((t) => ETH_CATEGORIES.has(t.category));
     // Metadata that names no token (too short, an unknown selector, or a token selector without the token) cannot
@@ -131,8 +133,9 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
     if (signedBound.length > 0) tokens = signedBound;
     else if (bound.length > 0) tokens = bound;
     else if (payer === undefined ? eth.length > 0 : payerEth.length > 0) tokens = []; // unknown payer: any ETH, as before 6 Nov
-    else if (namesToken && payer !== undefined) {
-      // The announcement names a token that never arrived and its payer sent nothing: another token or a stranger's
+    else if (namesToken && payer !== undefined && eth.every((e) => senderOf(e.hash) !== undefined)) {
+      // The announcement names a token that never arrived and its payer sent nothing (every ETH signer known, none the
+    // payer's; an unknown ETH signer falls through to the rule below, bug bounty 8 Nov): another token or a stranger's
       // ETH next to it is not this payment (bug bounty 3 and 4 Nov, P4b). Left out as unfunded.
       if (allTokens.length > 0) tokenDust++;
       unfunded++;
@@ -145,6 +148,9 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
       continue;
     }
     const picked = asset === 'TOKEN' ? tokens : eth;
+    if (!fundedAt.has(p.stealth)) fundedAt.set(p.stealth, p.blockNumber);
+    const out: PaymentLog[] = [];
+    byIndex.set(i, out);
     const claimedOther =
       p.asset !== 'UNKNOWN' && (p.asset !== asset || (asset === 'TOKEN' && p.token !== null && !picked.some((t) => t.token === p.token)));
     if (claimedOther) assetMismatch++;
@@ -152,7 +158,7 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
       const key = `${t.hash}|${p.stealth}|${t.token ?? 'eth'}`; // one transaction can pay several stealth addresses (N06)
       if (seen.has(key)) continue; // two announcements for one transfer: one payment
       seen.add(key);
-      payments.push({
+      out.push({
         source: 'erc5564',
         txHash: t.hash,
         blockNumber: t.block,
@@ -164,5 +170,6 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
       });
     }
   }
+  for (let i = 0; i < logs.length; i++) payments.push(...(byIndex.get(i) ?? []));
   return { payments, unfunded, assetMismatch, tokenDust };
 }
