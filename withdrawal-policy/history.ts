@@ -368,7 +368,7 @@ export async function loadWithdrawalHistory(
         tokenLogs && typeof tokenLogs.node.getCode === 'function'
           ? tokenLogs.node
               .getCode(x.toLowerCase() as Hex, block)
-              .then((c) => (typeof c === 'string' ? c : null)) // no answer is unread, not "no code" (bug bounty 8 Nov)
+              .then((c) => (typeof c === 'string' ? c : c === undefined ? '0x' : null)) // viem answers undefined for no code; null or an error is unread (bug bounty 8 Nov)
               .catch(() => null)
           : Promise.resolve(null),
       );

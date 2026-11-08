@@ -25,6 +25,8 @@ export type GuardInput = {
   usedDestinations: Hex[]; // destinations that other payments of yours were withdrawn to (rebuilt from chain history, plus this session)
   historyComplete: boolean; // true only once past withdrawals fully loaded; false while loading or unreadable. Missing = incomplete
   receivedAt?: number; // ms: the time of the block the funds arrived in (funding.ts arrivalBlock), not the announcement's
+  /** True when the arrival block was found but its time could not be read: the timing check warns (bug bounty 8 Nov). */
+  receivedAtUnknown?: boolean;
   isToken: boolean;
   /**
    * True when what the stealth address received could not be fully read from the chain (announcement metadata is often
@@ -88,6 +90,10 @@ const withL1 = (list: readonly string[]): string[] => {
   for (const x of list) if (/^0x[0-9a-fA-F]{40}$/.test(x)) out.push(l1Of(x));
   return out;
 };
+/** True when `a`, in its plain or its de-aliased form, is in `list` in either form: a destination typed as the alias of
+ * a linked L1 contract, or a registrant recorded under its alias with gas from its real address (bug bounty 8 Nov). */
+const linked = (list: readonly string[], a: string | undefined): boolean =>
+  !!a && withL1(list).some((x) => same(x, a) || (/^0x[0-9a-fA-F]{40}$/.test(a) && same(x, l1Of(a))));
 
 export function withdrawChecks(g: GuardInput): Check[] {
   const out: Check[] = [];
@@ -103,13 +109,13 @@ export function withdrawChecks(g: GuardInput): Check[] {
   if (same(g.destination, g.stealthAddress)) out.push({ id: 'self', level: 'block', text: 'That is the payment address itself.' });
 
   // H1 registrant reuse. Fail closed: while the key wallet is unknown, no destination can be checked against it.
-  if (same(g.destination, g.walletAddress))
+  if (linked(known(g.walletAddress) ? [g.walletAddress] : [], g.destination))
     out.push({
       id: 'H1',
       level: 'block',
       text: 'H1: this is the wallet that created your stealth keys. Withdrawing here links the payment to you directly.',
     });
-  else if (Array.isArray(g.registrants) && withL1(g.registrants.filter((r): r is Hex => typeof r === 'string')).some((r) => same(g.destination, r)))
+  else if (Array.isArray(g.registrants) && linked(g.registrants.filter((r): r is Hex => typeof r === 'string'), g.destination))
     out.push({
       id: 'H1',
       level: 'block',
@@ -123,7 +129,7 @@ export function withdrawChecks(g: GuardInput): Check[] {
   // known payer only warned). Every payer read from the chain counts, not only the one passed as `payer`. Fail closed:
   // while the payer is unknown, nothing can be ruled out, so every destination is blocked.
   const payers = [g.payer, ...(Array.isArray(g.payers) ? g.payers : [])];
-  if (withL1(payers.filter((p): p is Hex => known(p))).some((p) => same(g.destination, p)))
+  if (linked(payers.filter((p): p is Hex => known(p)), g.destination))
     out.push({ id: 'H2', level: 'block', text: 'H2: this address sent you the payment. Sending it back links both ends.' });
   else if (!known(g.payer))
     out.push({ id: 'H2', level: 'block', text: 'H2: cannot check, payer unknown. Withdraw stays locked until the payer is known.' });
@@ -153,7 +159,6 @@ export function withdrawChecks(g: GuardInput): Check[] {
   // for a token payment (31 Oct): where that ETH came from is checked against every wallet linked to you.
   const tokenLike = g.isToken || g.assetUnknown === true;
   const gasFrom = Array.isArray(g.gasFrom) ? (withL1(g.gasFrom.filter((x): x is Hex => typeof x === 'string')) as Hex[]) : null;
-  const has = (list: string[], a: string) => list.some((x) => same(x, a));
   const mine: [string | undefined, string][] = [
     [g.walletAddress, 'your key wallet'],
     ...(Array.isArray(g.registrants) ? g.registrants : []).map((r): [string, string] => [r, 'a wallet that published your meta-address']),
@@ -162,10 +167,11 @@ export function withdrawChecks(g: GuardInput): Check[] {
     ...g.ownStealthAddresses.filter((a) => !same(a, g.stealthAddress)).map((a): [string, string] => [a, 'another of your payment addresses']),
     ...g.usedDestinations.map((a): [string, string] => [a, 'an address your payments were withdrawn to']),
   ];
-  const linkedBy = gasFrom ? mine.find(([a]) => !!a && has(gasFrom, a))?.[1] : undefined;
+  // both sides in both forms: gasFrom is de-aliased above, each linked address is de-aliased here (bug bounty 8 Nov)
+  const linkedBy = gasFrom ? mine.find(([a]) => linked(gasFrom, a))?.[1] : undefined;
   // the payer of another payment of yours: ties the two payments, unless it also paid this one (then it already does)
   const sharedPayer = gasFrom
-    ? (Array.isArray(g.otherPayers) ? g.otherPayers : []).some((p) => typeof p === 'string' && has(gasFrom, p) && !payers.some((q) => same(q, p)))
+    ? (Array.isArray(g.otherPayers) ? g.otherPayers : []).some((p) => typeof p === 'string' && linked(gasFrom, p) && !linked(payers.filter((q): q is Hex => known(q)), p))
     : false;
   if (g.isToken && !g.hasGas)
     out.push({
@@ -206,7 +212,13 @@ export function withdrawChecks(g: GuardInput): Check[] {
   else out.push({ id: 'H5', level: 'ok', text: 'H5: pays its own gas.' });
 
   // timing
-  if (g.receivedAt && g.now - g.receivedAt < 3600_000)
+  if (g.receivedAtUnknown === true)
+    out.push({
+      id: 'time',
+      level: 'warn',
+      text: 'Timing: when the funds arrived could not be read. If they came in less than an hour ago, waiting makes the payment and the withdrawal harder to pair.',
+    });
+  else if (g.receivedAt && g.now - g.receivedAt < 3600_000)
     out.push({
       id: 'time',
       level: 'warn',
