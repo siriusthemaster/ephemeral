@@ -23,6 +23,23 @@ type Call = { target: string; callData: `0x${string}` };
 /** A node refused a batch for its size: execution time or gas cap (public Arbitrum nodes stop eth_call after 5 s). */
 const TOO_HEAVY = /timeout|timed out|aborted|out of gas|gas limit|gas cap|exceed|too large|response size/i;
 const MIN_BATCH = 10;
+/** Every endpoint answered "too many requests": wait and try the same batch again (8 Nov, public Arbitrum nodes). */
+const RATE_LIMITED = /\b429\b|rate limit|too many requests|capacity/i;
+const RATE_WAITS_MS = [15_000, 30_000, 60_000, 120_000, 240_000];
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function callWithPatience<T>(f: () => Promise<T>, waits = RATE_WAITS_MS, wait = sleep): Promise<T> {
+  for (let k = 0; ; k++) {
+    try {
+      return await f();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (k >= waits.length || !RATE_LIMITED.test(msg)) throw e;
+      await wait(waits[k] as number);
+    }
+  }
+}
+export const __test = { callWithPatience };
 
 /** Run calls through Multicall3.aggregate3 in batches. Failed sub calls come back as null. A batch a node refuses as
  *  too heavy is split in half (down to MIN_BATCH calls) and the smaller size is kept for the rest (7 Nov: one Arbitrum
@@ -38,7 +55,7 @@ export async function multicall(rpc: Rpc, calls: Call[], block: string, perBatch
     });
     let raw: `0x${string}`;
     try {
-      raw = await rpc.call<`0x${string}`>('eth_call', [{ to: MULTICALL3, data }, block]);
+      raw = await callWithPatience(() => rpc.call<`0x${string}`>('eth_call', [{ to: MULTICALL3, data }, block]));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (slice.length <= MIN_BATCH || !TOO_HEAVY.test(msg)) throw e;
