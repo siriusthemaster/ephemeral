@@ -122,6 +122,9 @@ export class FallbackRpc implements Rpc {
             return out;
           } catch (e) {
             const msg = redact(e instanceof Error ? e.message : String(e), url);
+            // the error itself carries the redacted text too: a gateway that repeats the request path in its own
+            // message would otherwise put the key into the run log when this error is thrown again (bug bounty 8 Nov)
+            if (e instanceof Error) e.message = msg;
             if (trace.length < 12) trace.push(`${hostOf(url)}: ${msg.slice(0, 90)}`);
             if (/HTTP 40[13]|unauthorized|api key|personal token/i.test(msg)) {
               this.dead.add(url); // needs a key: never works here
@@ -198,13 +201,18 @@ export function hostOf(url: string): string {
   }
 }
 
-/** Removes the full URL (and its path, where keys live) from an error message. */
+/** Removes the full URL (and its path, where keys live) from an error message, and every part of the path or query
+ *  long enough to be a key on its own, however the message quotes it (bug bounty 8 Nov). */
 export function redact(msg: string, url: string): string {
   let out = msg.split(url).join(hostOf(url));
   try {
     const u = new URL(url);
     const tail = u.pathname + u.search;
     if (tail.length > 1) out = out.split(tail).join('/***');
+    const parts = [...u.pathname.split('/'), ...[...u.searchParams.values()], u.username, u.password]
+      .filter((x) => x.length >= 12)
+      .sort((a, b) => b.length - a.length);
+    for (const x of parts) out = out.split(x).join('***');
   } catch {
     /* not a URL */
   }

@@ -8,7 +8,8 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CHAINS, RULES, rpcUrls, SECTOR_URL, type ChainCfg } from './config.ts';
-import { loadCheckpoint, saveCheckpoint, skipHash, type ChainState } from './checkpoint.ts';
+import { randomInt } from 'node:crypto';
+import { loadCheckpoint, saveCheckpoint, type ChainState } from './checkpoint.ts';
 import { buildTvu, sanityCheck, type ChainResult, type Tvu } from './output.ts';
 import { fetchPrices } from './prices.ts';
 import { FallbackRpc, type Rpc } from './rpc.ts';
@@ -38,6 +39,15 @@ export interface RunResult {
   tvu: Tvu | null;
 }
 
+/** A copy in a random order (Fisher-Yates over crypto randomness): nobody can know which address is read when. */
+const shuffled = <T>(xs: T[]): T[] => {
+  const a = [...xs];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [a[i], a[j]] = [a[j] as T, a[i] as T];
+  }
+  return a;
+};
 const hexNum = (h: string): number => Number(BigInt(h));
 
 export async function run(o: RunOpts, d: Deps): Promise<RunResult> {
@@ -120,22 +130,33 @@ export async function run(o: RunOpts, d: Deps): Promise<RunResult> {
     const s = states[c.key] as ChainState;
     // Values are read at the latest block, batch by batch. A fixed block fails on public nodes without archive
     // state: the scan can take hours, and on Arbitrum even the minutes a rate-limited read waits are too long
-    // ("Unknown state", 7 and 8 Nov). The snapshot is the moment of the read; a balance that moves while it runs
-    // moves the number by that much. Addresses announced after the scan block are added by the next run.
+    // ("Unknown state", 7 and 8 Nov). Addresses announced after the scan block are added by the next run.
     const block = 'latest';
     const blk = await rpc.call<{ timestamp: string }>('eth_getBlockByNumber', [block, false]);
     asOfSec = Math.min(asOfSec, hexNum(blk.timestamp));
     const tokens = await verifyTokens(rpc, c, block, d.log);
-    const addrs = [...s.addresses].filter((a) => !s.skip.has(skipHash(a))).sort();
+    // Every address an announcement by anyone but our routers named (bug bounty 8 Nov: a router announcement of
+    // somebody else's address no longer takes it out of the number; `s.addresses` never holds router-only ones).
+    const addrs = [...s.addresses].sort();
     const vals = await readBalances(rpc, c, tokens, addrs, prices, block);
     const f = await applyFilters(rpc, vals, prices, block);
     const umbraPending = await readUmbraPending(rpc, tokens, prices, block);
+    // Every address with value is read a second time, after the Umbra read, in a random order, and the smaller of
+    // its two reads counts (bug bounty 8 Nov). Read batch by batch, one pot moved from address to address while the
+    // run reads was counted at every address it reached, and a balance moved into Umbra was counted twice. Now funds
+    // that move during the run count at most once; funds that left during it may count nowhere (an undercount).
+    const again = new Map((await readBalances(rpc, c, tokens, shuffled(f.kept.map((v) => v.address)), prices, block)).map((v) => [v.address, v]));
+    const kept = f.kept.map((v) => ({
+      address: v.address,
+      nativeUsd: Math.min(v.nativeUsd, again.get(v.address)?.nativeUsd ?? 0),
+      tokensUsd: Math.min(v.tokensUsd, again.get(v.address)?.tokensUsd ?? 0),
+    }));
     outliers.count += f.outliers.count;
     outliers.usd += f.outliers.usd;
     const r: ChainResult = {
       key: c.key,
-      native: f.kept.reduce((x, v) => x + v.nativeUsd, 0),
-      tokens: f.kept.reduce((x, v) => x + v.tokensUsd, 0),
+      native: kept.reduce((x, v) => x + v.nativeUsd, 0),
+      tokens: kept.reduce((x, v) => x + v.tokensUsd, 0),
       umbraPending,
       addresses: addrs.length,
     };
