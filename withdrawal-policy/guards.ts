@@ -31,9 +31,11 @@ export type GuardInput = {
   /**
    * True when what the stealth address received could not be fully read from the chain (announcement metadata is often
    * too short to name the asset, and is never trusted for it). It may hold a token, so H5 never passes silently: without
-   * ETH for gas it blocks like a token payment, with ETH it warns.
+   * ETH for gas it blocks like a token payment, with ETH it warns. paymentView's reason ('unread', 'unseen', 'nft') can
+   * be passed as it is: any reason counts as true (bug bounty 9 Nov: the README says to pass the view, and a string
+   * failed the old `=== true` test, so H5 passed silently).
    */
-  assetUnknown?: boolean;
+  assetUnknown?: boolean | string | null;
   hasGas: boolean;
   /**
    * For a token payment, or one whose asset is unknown: who sent the ETH on the stealth address that pays the gas, read
@@ -49,8 +51,10 @@ export type GuardInput = {
    *  burn; a token withdrawal without it is blocked too (cannot check). */
   tokenAddress?: Hex;
   /** Wallets that published this meta-address in a registry (ERC-6538): like the key wallet, never a destination
-   *  (bug bounty 3 Nov: the scanner counts a withdrawal to any registrant as H1, the guard did not see them). */
-  registrants?: Hex[];
+   *  (bug bounty 3 Nov: the scanner counts a withdrawal to any registrant as H1, the guard did not see them).
+   *  null = the registry could not be read: H1 blocks, like an unknown key wallet (bug bounty 9 and 10 Nov: a failed
+   *  read passed as an empty list let every registrant through). Pass [] only after a read that completed. */
+  registrants?: Hex[] | null;
   now: number;
 };
 
@@ -123,6 +127,12 @@ export function withdrawChecks(g: GuardInput): Check[] {
     });
   else if (!known(g.walletAddress))
     out.push({ id: 'H1', level: 'block', text: 'H1: cannot check, key wallet unknown. Withdraw stays locked until the key wallet is known.' });
+  else if (g.registrants === null)
+    out.push({
+      id: 'H1',
+      level: 'block',
+      text: 'H1: cannot check, the registry could not be read. Withdraw stays locked until it can be read.',
+    });
   else out.push({ id: 'H1', level: 'ok', text: 'H1: not your key wallet.' });
 
   // H2 round trip. Every known payer blocks, like H1: the payer is never a destination (bug bounty, 26 Oct; before, a
@@ -157,7 +167,8 @@ export function withdrawChecks(g: GuardInput): Check[] {
 
   // H5 gas funding. A payment whose asset could not be read counts as a possible token payment. Holding ETH is not enough
   // for a token payment (31 Oct): where that ETH came from is checked against every wallet linked to you.
-  const tokenLike = g.isToken || g.assetUnknown === true;
+  const assetUnknown = g.assetUnknown === true || (typeof g.assetUnknown === 'string' && g.assetUnknown !== '');
+  const tokenLike = g.isToken || assetUnknown;
   const gasFrom = Array.isArray(g.gasFrom) ? (withL1(g.gasFrom.filter((x): x is Hex => typeof x === 'string')) as Hex[]) : null;
   const mine: [string | undefined, string][] = [
     [g.walletAddress, 'your key wallet'],
@@ -179,7 +190,7 @@ export function withdrawChecks(g: GuardInput): Check[] {
       level: 'block',
       text: 'H5: this payment holds a token but no ETH for gas. Do not fund it from a wallet linked to you.',
     });
-  else if (g.assetUnknown === true && !g.hasGas)
+  else if (assetUnknown && !g.hasGas)
     out.push({
       id: 'H5',
       level: 'block',
@@ -203,7 +214,7 @@ export function withdrawChecks(g: GuardInput): Check[] {
       level: 'warn',
       text: 'H5: where the ETH for gas on this payment came from could not be read from the chain, so it cannot be confirmed that it did not come from a linked wallet.',
     });
-  else if (g.assetUnknown === true)
+  else if (assetUnknown)
     out.push({
       id: 'H5',
       level: 'warn',
