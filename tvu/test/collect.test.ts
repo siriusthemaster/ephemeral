@@ -137,7 +137,7 @@ test('price falls back to the second source', async () => {
 });
 
 const base = (usd: number): Tvu =>
-  buildTvu([{ key: 'ethereum', native: usd, tokens: 0, umbraPending: 0, addresses: 3 }], { count: 0, usd: 0 }, PRICES, 1_800_000_000);
+  buildTvu([{ key: 'ethereum', native: usd, tokens: 0, umbraPending: 0, umbraNative: 0, addresses: 3 }], { count: 0, usd: 0 }, PRICES, 1_800_000_000);
 
 test('sanity asserts', () => {
   sanityCheck(base(10_000), null);

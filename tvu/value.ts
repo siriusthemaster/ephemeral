@@ -43,8 +43,9 @@ export const __test = { callWithPatience };
 
 /** Run calls through Multicall3.aggregate3 in batches. Failed sub calls come back as null. A batch a node refuses as
  *  too heavy is split in half (down to MIN_BATCH calls) and the smaller size is kept for the rest (7 Nov: one Arbitrum
- *  batch of 500 calls hit the 5 s execution limit on every public endpoint and the run failed). */
-export async function multicall(rpc: Rpc, calls: Call[], block: string, perBatch = CALLS_PER_BATCH): Promise<(`0x${string}` | null)[]> {
+ *  batch of 500 calls hit the 5 s execution limit on every public endpoint and the run failed). With `split` false
+ *  the refusal is thrown instead, for reads that must stay in one call. */
+export async function multicall(rpc: Rpc, calls: Call[], block: string, perBatch = CALLS_PER_BATCH, split = true): Promise<(`0x${string}` | null)[]> {
   const out: (`0x${string}` | null)[] = [];
   let size = perBatch;
   const run = async (slice: Call[]): Promise<void> => {
@@ -58,7 +59,7 @@ export async function multicall(rpc: Rpc, calls: Call[], block: string, perBatch
       raw = await callWithPatience(() => rpc.call<`0x${string}`>('eth_call', [{ to: MULTICALL3, data }, block]));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (slice.length <= MIN_BATCH || !TOO_HEAVY.test(msg)) throw e;
+      if (!split || slice.length <= MIN_BATCH || !TOO_HEAVY.test(msg)) throw e;
       size = Math.min(size, Math.ceil(slice.length / 2));
       for (let j = 0; j < slice.length; ) {
         const part = slice.slice(j, j + size);
@@ -150,14 +151,55 @@ export async function readBalances(
   return out;
 }
 
-/** Tokens Umbra holds for stealth owners who have not withdrawn yet. */
-export async function readUmbraPending(rpc: Rpc, tokens: TokenCfg[], p: Prices, block: string): Promise<number> {
-  const calls: Call[] = tokens.map((t) => ({
-    target: t.address,
-    callData: encodeFunctionData({ abi: ABI, functionName: 'balanceOf', args: [UMBRA as `0x${string}`] }),
-  }));
-  const res = await multicall(rpc, calls, block);
-  return tokens.reduce((sum, t, i) => sum + toUsd(u256(res[i] ?? null), t.decimals, tokenPrice(t, p)), 0);
+export interface UmbraPending {
+  /** the native currency Umbra holds (ETH, POL or xDAI payments) */
+  native: number;
+  /** the listed tokens Umbra holds */
+  tokens: number;
+}
+
+/** Calls for the native balance and the listed token balances of one address: native first, tokens in list order. */
+const balanceCalls = (a: string, tokens: TokenCfg[]): Call[] => [
+  { target: MULTICALL3, callData: encodeFunctionData({ abi: ABI, functionName: 'getEthBalance', args: [a as `0x${string}`] }) },
+  ...tokens.map((t) => ({ target: t.address, callData: encodeFunctionData({ abi: ABI, functionName: 'balanceOf', args: [a as `0x${string}`] }) })),
+];
+const valueAt = (res: (`0x${string}` | null)[], base: number, c: ChainCfg, tokens: TokenCfg[], p: Prices): { native: number; tokens: number } => ({
+  native: toUsd(u256(res[base] ?? null), 18, nativePrice(c, p)),
+  tokens: tokens.reduce((sum, t, k) => sum + toUsd(u256(res[base + 1 + k] ?? null), t.decimals, tokenPrice(t, p)), 0),
+});
+
+/** Value Umbra holds for stealth owners who have not withdrawn yet: its native balance (native payments wait there
+ *  too; bug bounty 9 Nov, it was not read) and its balance of the token list. */
+export async function readUmbraPending(rpc: Rpc, c: ChainCfg, tokens: TokenCfg[], p: Prices, block: string): Promise<UmbraPending> {
+  const res = await multicall(rpc, balanceCalls(UMBRA, tokens), block);
+  return valueAt(res, 0, c, tokens, p);
+}
+
+/** Addresses and the Umbra contract read together in ONE Multicall3 call, so all at one block: one pot is at one of
+ *  them only (bug bounty 9 Nov). Null when the node refuses the call as too heavy. */
+export async function readTogether(
+  rpc: Rpc,
+  c: ChainCfg,
+  tokens: TokenCfg[],
+  addresses: string[],
+  p: Prices,
+  block: string,
+): Promise<{ vals: Map<string, AddrValue>; umbra: UmbraPending } | null> {
+  const per = 1 + tokens.length;
+  const calls = [...addresses.flatMap((a) => balanceCalls(a, tokens)), ...balanceCalls(UMBRA, tokens)];
+  let res: (`0x${string}` | null)[];
+  try {
+    res = await multicall(rpc, calls, block, calls.length, false);
+  } catch (e) {
+    if (TOO_HEAVY.test(e instanceof Error ? e.message : String(e))) return null;
+    throw e;
+  }
+  const vals = new Map<string, AddrValue>();
+  addresses.forEach((address, i) => {
+    const v = valueAt(res, i * per, c, tokens, p);
+    vals.set(address, { address, nativeUsd: v.native, tokensUsd: v.tokens });
+  });
+  return { vals, umbra: valueAt(res, addresses.length * per, c, tokens, p) };
 }
 
 /** EIP-7702 delegation markers (0xef0100 + address) belong to ordinary accounts, not contracts. */

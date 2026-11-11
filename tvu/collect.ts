@@ -14,7 +14,7 @@ import { buildTvu, sanityCheck, type ChainResult, type Tvu } from './output.ts';
 import { fetchPrices } from './prices.ts';
 import { FallbackRpc, type Rpc } from './rpc.ts';
 import { scanChain } from './scan.ts';
-import { applyFilters, readBalances, readUmbraPending, verifyTokens, type Prices } from './value.ts';
+import { applyFilters, CALLS_PER_BATCH, readBalances, readTogether, readUmbraPending, verifyTokens, type Prices } from './value.ts';
 
 export interface Deps {
   makeRpc(c: ChainCfg): Promise<Rpc>;
@@ -140,7 +140,7 @@ export async function run(o: RunOpts, d: Deps): Promise<RunResult> {
     const addrs = [...s.addresses].sort();
     const vals = await readBalances(rpc, c, tokens, addrs, prices, block);
     const f = await applyFilters(rpc, vals, prices, block);
-    const umbraPending = await readUmbraPending(rpc, tokens, prices, block);
+    let umbra = await readUmbraPending(rpc, c, tokens, prices, block);
     // Every address with value is read a second time, after the Umbra read, in a random order, and the smaller of
     // its two reads counts (bug bounty 8 Nov). Read batch by batch, one pot moved from address to address while the
     // run reads was counted at every address it reached, and a balance moved into Umbra was counted twice. Now funds
@@ -151,17 +151,36 @@ export async function run(o: RunOpts, d: Deps): Promise<RunResult> {
       nativeUsd: Math.min(v.nativeUsd, again.get(v.address)?.nativeUsd ?? 0),
       tokensUsd: Math.min(v.tokensUsd, again.get(v.address)?.tokensUsd ?? 0),
     }));
+    // Then the largest holders and Umbra once more, all in ONE call, so at one block, and each keeps the smallest of
+    // its reads (bug bounty 9 Nov: a pot moved back and forth between two addresses on every block could sit at each
+    // of them for both of its reads and count twice). In one call a pot is at one place only. If the node refuses
+    // the call as too heavy, half as many of the largest holders are read together.
+    const per = 1 + tokens.length;
+    const top = kept.filter((v) => v.nativeUsd + v.tokensUsd > 0).sort((x, y) => y.nativeUsd + y.tokensUsd - (x.nativeUsd + x.tokensUsd));
+    for (let k = Math.min(top.length, Math.floor(CALLS_PER_BATCH / per) - 1); k >= 0; k = k === 0 ? -1 : Math.floor(k / 2)) {
+      const together = await readTogether(rpc, c, tokens, top.slice(0, k).map((v) => v.address), prices, block);
+      if (together === null) continue;
+      for (const v of top.slice(0, k)) {
+        const t = together.vals.get(v.address);
+        v.nativeUsd = Math.min(v.nativeUsd, t?.nativeUsd ?? 0);
+        v.tokensUsd = Math.min(v.tokensUsd, t?.tokensUsd ?? 0);
+      }
+      umbra = { native: Math.min(umbra.native, together.umbra.native), tokens: Math.min(umbra.tokens, together.umbra.tokens) };
+      if (k < top.length) d.log(`${c.key}: the ${k} largest of ${top.length} holders read together`);
+      break;
+    }
     outliers.count += f.outliers.count;
     outliers.usd += f.outliers.usd;
     const r: ChainResult = {
       key: c.key,
       native: kept.reduce((x, v) => x + v.nativeUsd, 0),
       tokens: kept.reduce((x, v) => x + v.tokensUsd, 0),
-      umbraPending,
+      umbraPending: umbra.tokens,
+      umbraNative: umbra.native,
       addresses: addrs.length,
     };
     results.push(r);
-    d.log(`${c.key}: ${addrs.length} addresses, ${vals.length} with value, outliers ${f.outliers.count} (${Math.round(f.outliers.usd)} USD), native ${Math.round(r.native)}, tokens ${Math.round(r.tokens)}, umbra pending ${Math.round(r.umbraPending)}`);
+    d.log(`${c.key}: ${addrs.length} addresses, ${vals.length} with value, outliers ${f.outliers.count} (${Math.round(f.outliers.usd)} USD), native ${Math.round(r.native)}, tokens ${Math.round(r.tokens)}, umbra pending ${Math.round(r.umbraPending)} tokens, ${Math.round(r.umbraNative)} native`);
   }
 
   // 5. build, check, publish
