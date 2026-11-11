@@ -99,7 +99,8 @@ test('Znax (Tri) 8 Nov F1: a stranger s dust of a relayed named token is no seco
 });
 
 // ------------------------------------------------------------------ owned withdrawals (heuristics.ts)
-const opts = { uniqueFeeMax: UNIQUE_FEE_MAX, cutoffBlock: C };
+// TA stands for a known token (relay tokens, bug bounty 9 Nov); TB is the stranger's own token
+const opts = { uniqueFeeMax: UNIQUE_FEE_MAX, cutoffBlock: C, relayTokens: new Set([TA]) };
 const D = a(0xd001);
 const pay = (token: string | null, tx: number, block: number, sender = P): Payment => ({
   source: 'erc5564', stealth: S, sender, block, timestamp: 0, asset: token === null ? 'ETH' : 'TOKEN', token, txHash: h(tx),

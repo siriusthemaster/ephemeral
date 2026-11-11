@@ -183,7 +183,7 @@ after(() => {
 });
 
 const quiet = () => {};
-const base = () => ({ chain: 'sepolia' as const, rpcUrl: url, cacheDir: join(work, 'cache'), outDir: join(work, 'out'), concurrency: 3, log: quiet });
+const base = () => ({ chain: 'sepolia' as const, rpcUrl: url, cacheDir: join(work, 'cache'), outDir: join(work, 'out'), concurrency: 3, log: quiet, relayTokens: [fx.T1] });
 
 test('full scan reproduces the fixture numbers', async () => {
   const s = await runScan(base());

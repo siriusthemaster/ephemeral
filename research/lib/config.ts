@@ -95,8 +95,24 @@ export const TOKEN_SELECTORS = new Set([
   '2eb2c2d6', // safeBatchTransferFrom(address,address,uint256[],uint256[],bytes) (ERC-1155 batch)
 ]);
 
-/** Bump when cached data formats or fetch parameters change; a mismatch clears the cache. */
-export const SCAN_VERSION = 6;
+/** Bump when cached data formats or fetch parameters change; a mismatch clears the cache. 7: the arrivals window
+ *  reaches a day before the Announcer's first block (bug bounty 9 Nov: a cache from version 6 kept the shorter range),
+ *  and counterparty code is read at the event block too. */
+export const SCAN_VERSION = 7;
+
+/** Known token contracts per chain whose relayed moves (permit, relayer) count as the owner's withdrawal
+ *  (heuristics.ts). Only the owner's signature can start a transfer of these out of a stealth address; any other
+ *  token contract can log a move "from" the address that its owner never made (bug bounty 8, 9 and 10 Nov). The
+ *  official deployments, the same list as tvu/config.ts. Lower case. */
+export const RELAY_TOKENS: Record<ChainName, readonly string[]> = {
+  mainnet: [
+    '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', // USDC
+    '0xdac17f958d2ee523a2206206994597c13d831ec7', // USDT
+    '0x6b175474e89094c44da98b954eedeac495271d0f', // DAI
+    '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2', // WETH
+  ],
+  sepolia: [],
+};
 
 /** Pages of 1,000 transfers read per address before the lookup is marked truncated. */
 export const MAX_TRANSFER_PAGES = 10;

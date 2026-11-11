@@ -52,11 +52,11 @@ export const METHOD_NOTES = [
   'Unit of analysis is the stealth address; several payments to one stealth address count once.',
   "paperPct reproduces the paper's metric: stealth addresses emptied in a single withdrawal that went to a registrant (H1) or back to the sender (H2), over all withdrawn. The paper reports 48.51% for Ethereum (4,696 of 9,680).",
   'paperComparable looks at the chain as of the cutoff: Umbra payments, Umbra registrations and withdrawals before it.',
-  'Only withdrawals the owner made count: signed by the stealth address, an Umbra TokenWithdrawal, ETH leaving a smart-account or EIP-7702 delegated stealth address, or a relayed move of the token that was paid in; never before the first payment or in its block.',
+  'Only withdrawals the owner made count: signed by the stealth address, an Umbra TokenWithdrawal, ETH leaving the stealth address in a transaction it did not sign (only code its key put there can do that), or a relayed move of a paid token on the list of known tokens (USDC, USDT, DAI, WETH); never before the first payment or in its block.',
   'Announced addresses that had sent transactions before their first payment are not fresh stealth addresses and are left out.',
   'A withdrawal is judged on the paid asset: an ETH payment by ETH leaving, a token payment by the token leaving; a leftover-gas sweep does not break a single withdrawal.',
   'identityPct is wider: H1 or H2 over any withdrawal, or H5.',
-  'H3 ignores recipients that are contracts (routers, the Umbra contract) to avoid false clusters.',
+  'H3 ignores recipients that are contracts (routers, the Umbra contract) to avoid false clusters: code at the end block and already at the first withdrawal to it.',
   'H4 uses fee-market withdrawals the stealth address signed itself; the paper excluded all token payments, here self-signed token withdrawals are included.',
   'H5 is ours: token-only stealth addresses that paid their own gas, where the ETH arrived between the first payment and their first own transaction, from a registrant or from an address the funds later went to. ETH from the payer or from contracts does not count.',
 ];

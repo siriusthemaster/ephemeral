@@ -16,12 +16,13 @@ import type { RawLog } from '../lib/logs.ts';
 import { a, h } from './fixture.ts';
 
 const C = 1_000_000;
-const opts = { uniqueFeeMax: UNIQUE_FEE_MAX, cutoffBlock: C };
 const P = a(0xa001); // payer
 const R = a(0xa002); // registrant
 const D = a(0xd001); // a fresh destination
 const TA = a(0x7a7a);
 const TB = a(0x7b7b);
+// TA and TB stand for known tokens: their relayed moves are the owner's (bug bounty 9 Nov, relay tokens)
+const opts = { uniqueFeeMax: UNIQUE_FEE_MAX, cutoffBlock: C, relayTokens: new Set([TA, TB]) };
 const S = a(0x5001);
 const S2 = a(0x5002);
 const STRANGER = a(0xbad1);
