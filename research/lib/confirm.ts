@@ -97,8 +97,9 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
   // window (bug bounty 8 Nov). After a funded one, a later announcement looks 2 blocks back, so ETH topped up for gas
   // is not read as a new payment. What arrived before that funded announcement and stayed unclaimed, from a signer
   // other than its own, is still in reach of a later one (bug bounty 8 Nov, afternoon: a stranger who funded his own
-  // earlier announcement with 1 wei or a dust token still shortened the real one's window and hid the payment). The
-  // payer's own gas next to its funded announcement stays out. Results keep the input order.
+  // earlier announcement with 1 wei or a dust token still shortened the real one's window and hid the payment), and so
+  // is what landed unclaimed inside that funded announcement's own window (bug bounty 9 Nov). The payer's own gas next
+  // to its funded announcement stays out. Results keep the input order.
   const order = logs
     .map((p, i) => ({ p, i }))
     .sort((x, y) => x.p.blockNumber - y.p.blockNumber || x.p.logIndex - y.p.logIndex || x.i - y.i);
@@ -115,9 +116,12 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
     if (first !== undefined && first.block < p.blockNumber) {
       arrived = arrivals(p, incoming, WINDOW_BEFORE);
       if (first.payer !== undefined) {
+        // up to the end of the funded announcement's own window: what landed in its 12 blocks after it and stayed
+        // unclaimed was read there as dust, not as its payment (bug bounty 9 Nov: before, only what arrived before
+        // the funded announcement's block was in reach, so a token paid inside that window stayed hidden)
         const older = arrivals(p, incoming, WINDOW_BEFORE_FIRST).filter((t) => {
           const by = senderOf(t.hash);
-          return t.block < first.block && !claimed(t, p.stealth) && by !== undefined && by !== first.payer && !arrived.includes(t);
+          return t.block <= first.block + WINDOW_AFTER && !claimed(t, p.stealth) && by !== undefined && by !== first.payer && !arrived.includes(t);
         });
         arrived = [...older, ...arrived];
       }
@@ -149,6 +153,10 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
     const namesToken = p.asset === 'TOKEN' && p.token !== null;
     let tokens: TransferLite[];
     if (signedBound.length > 0) tokens = signedBound;
+    // a relayed transfer of the named token whose log names the payer (a permit or transferWithAuthorization relay) is
+    // the payer's payment, and the payer's ETH next to it is its gas (bug bounty 9 Nov: that ETH took the payment over
+    // and the token was dropped as dust). A stranger's transfer of the same token names the stranger, not the payer.
+    else if (payer !== undefined && bound.some((t) => t.from === payer)) tokens = nameBound;
     // the payer's own ETH, not yet another announcement's payment, beats a token bound only by its name (bug bounty
     // 8 Nov: one unit of the named token from anyone took over a payment the payer made in ETH)
     else if (payer !== undefined && payerEth.some((e) => !claimed(e, p.stealth))) tokens = [];

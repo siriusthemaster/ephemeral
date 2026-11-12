@@ -74,6 +74,10 @@ export interface AnalyzeOptions {
   uniqueFeeMax: number;
   /** first block on or after PAPER_CUTOFF_ISO */
   cutoffBlock: number;
+  /** Token contracts whose relayed moves (permit, relayer) count as the owner's: known tokens whose transfers only the
+   *  owner's signature can start (config.ts RELAY_TOKENS). Any other token contract can log a move "from" a stealth
+   *  address that its owner never made. Default: none. */
+  relayTokens?: ReadonlySet<string>;
 }
 
 interface Scope {
@@ -84,6 +88,8 @@ interface Scope {
   firstBefore?: number;
   /** ignore payments, withdrawals, fundings and registrations at or after this block */
   asOfBlock?: number;
+  /** AnalyzeOptions.relayTokens */
+  relayTokens?: ReadonlySet<string>;
 }
 
 export interface Measure {
@@ -211,9 +217,7 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
       accepted: [],
     };
     const isSmartAccount = ds.contracts.has(addr) || ds.delegated.has(addr);
-    // tokens the sender of the first payment paid in: a relayed move of one of them is the owner's (see below)
-    const firstSenders = new Set(ps.filter((p) => p.block === firstBlock && p.sender !== '').map((p) => p.sender));
-    const trusted = new Set(ps.filter((p) => p.token !== null && firstSenders.has(p.sender)).map((p) => p.token as string));
+    const relayTokens = scope.relayTokens ?? NO_TOKENS;
     for (const w of wBy.get(addr) ?? []) {
       // Not before the first payment, and not in its block: the scan has no transaction order inside a block, so a
       // transaction placed before the payment there would count as a withdrawal from a fresh address (F39, 30 Oct).
@@ -229,14 +233,16 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
       // earlier event look owner-made (bug bounty F38). ETH cannot be faked that way, a token never paid in can.
       // ETH that leaves without the address signing needs code at the address in that block, and only its key can
       // give it code: owned also when the delegation was cleared before the scan's end block, where the code is read
-      // (bug bounty 8 Nov). A token paid in later by someone else can be a stranger's own dust whose contract then
-      // logs a fake move "from" the address (bug bounty 8 Nov): a relayed move counts for a token of the first payment
-      // or one the first payment's sender paid in.
+      // (bug bounty 8 Nov). A relayed move counts only for a known token (relayTokens: USDC, USDT, DAI, WETH), whose
+      // transfers out of the address only the owner's signature (a permit, an approval) can start. Any other token
+      // can be a stranger's own contract that logs a fake move "from" the address: paid in later (bug bounty 8 Nov),
+      // or paid in as the first payment, in the payment's block or just before it (bug bounty 9 and 10 Nov). Which
+      // payment came first proves nothing: a stranger who sees the announcement can be first in the scan's order.
       void isSmartAccount;
       const owned =
         w.kind === 'umbra-token' ||
         w.txFrom === addr ||
-        (w.kind === 'token' && w.token !== null && v.tokens.has(w.token) && (v.firstOf.get(w.token) === firstBlock || trusted.has(w.token))) ||
+        (w.kind === 'token' && w.token !== null && v.tokens.has(w.token) && relayTokens.has(w.token)) ||
         w.kind === 'eth';
       if (owned) v.accepted.push(w);
     }
@@ -358,16 +364,19 @@ const SINKS = new Set<string>([
 const isSink = (a: string): boolean => SINKS.has(a);
 
 const ALL_SOURCES = new Set<Payment['source']>(['umbra', 'erc5564']);
+const NO_TOKENS: ReadonlySet<string> = new Set<string>();
 const ALL_REGISTRIES = new Set<Registration['registry']>(['umbra', 'erc6538']);
 
 export function analyze(ds: Dataset, opts: AnalyzeOptions): Analysis {
-  const allScope: Scope = { sources: ALL_SOURCES, registries: ALL_REGISTRIES };
+  const relayTokens = opts.relayTokens ?? NO_TOKENS;
+  const allScope: Scope = { sources: ALL_SOURCES, registries: ALL_REGISTRIES, relayTokens };
 
   const paperComparable = measure(ds, {
     sources: new Set(['umbra']),
     registries: new Set(['umbra']),
     firstBefore: opts.cutoffBlock,
     asOfBlock: opts.cutoffBlock,
+    relayTokens,
   });
   const all = measure(ds, allScope);
   const sinceCutoff = measure(ds, { ...allScope, firstFrom: opts.cutoffBlock });

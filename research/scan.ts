@@ -19,18 +19,22 @@ import {
   MAX_TRANSFER_PAGES,
   PAPER_CUTOFF_ISO,
   PAPER_ETHEREUM,
+  RELAY_TOKENS,
   SCAN_VERSION,
   TOPICS,
   UNIQUE_FEE_MAX,
   type ChainName,
 } from './lib/config.ts';
 import {
+  atBlockKey,
   blockAtOrAfter,
   fetchAllTransfers,
   fetchBlockTimes,
   fetchCodeKinds,
+  fetchCodeKindsAt,
   fetchNoncesAt,
   fetchTxs,
+  splitCodeKinds,
   type CodeKind,
   finalizedBlock,
   type TransferPage,
@@ -55,6 +59,8 @@ export interface ScanOptions {
   sample?: number;
   logSpan?: bigint;
   log?: (msg: string) => void;
+  /** tokens whose relayed moves count as the owner's; default RELAY_TOKENS of the chain (tests pass their own) */
+  relayTokens?: readonly string[];
 }
 
 interface Meta {
@@ -62,6 +68,24 @@ interface Meta {
   params: string;
   toBlock: string;
   cutoffBlock?: string;
+}
+
+/** Hash of the fetch settings stored in meta.json: a run with other settings starts clean. The arrivals range starts
+ *  `arrivalsBeforeFirst` blocks before the Announcer's first block and is part of it (bug bounty 9 Nov: a change of
+ *  that range left the cache valid, so a cached run never read the payments sent ahead of the first announcements). */
+export function cacheParams(cfg: (typeof CHAINS)[ChainName], arrivalsBeforeFirst = WINDOW_BEFORE_FIRST): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        cfg: { ...cfg, umbraStartBlock: String(cfg.umbraStartBlock), erc5564StartBlock: String(cfg.erc5564StartBlock), erc6538StartBlock: String(cfg.erc6538StartBlock) },
+        MAX_TRANSFER_PAGES,
+        TOPICS,
+        PAPER_CUTOFF_ISO,
+        arrivalsBeforeFirst,
+      }),
+    )
+    .digest('hex')
+    .slice(0, 16);
 }
 
 /** Evenly spaced pick of n items, deterministic. */
@@ -81,17 +105,7 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
   if (chainId !== cfg.chainId) throw new Error(`RPC is on chain ${chainId}, expected ${cfg.chainId} (${cfg.name})`);
 
   // The cache is only valid for the same code version, fetch parameters and end block.
-  const params = createHash('sha256')
-    .update(
-      JSON.stringify({
-        cfg: { ...cfg, umbraStartBlock: String(cfg.umbraStartBlock), erc5564StartBlock: String(cfg.erc5564StartBlock), erc6538StartBlock: String(cfg.erc6538StartBlock) },
-        MAX_TRANSFER_PAGES,
-        TOPICS,
-        PAPER_CUTOFF_ISO,
-      }),
-    )
-    .digest('hex')
-    .slice(0, 16);
+  const params = cacheParams(cfg);
   let meta = o.fresh ? undefined : readJson<Meta>(join(dir, 'meta.json'));
   if (meta && (meta.version !== SCAN_VERSION || meta.params !== params || (o.toBlock !== undefined && BigInt(meta.toBlock) !== o.toBlock))) {
     log('Cache was made with other settings or another end block; starting clean.');
@@ -249,20 +263,28 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
   const fundings: Funding[] = [];
   for (const s of needGas) for (const t of incoming.get(s)?.transfers ?? []) fundings.push({ stealth: s, txHash: t.hash, block: t.block, from: t.from });
 
-  // 8. Contracts among recipients and funders (excluded from H3 and H5).
+  // 8. Contracts among recipients and funders (excluded from H3 and H5). Code at the end block, and for a recipient or
+  //    funder with code then, also at its first event (the first withdrawal to it or funding from it): only one that
+  //    had code at that event counts as a contract (bug bounty 9 Nov: a counterfactual wallet deployed after the
+  //    withdrawals reached it was left out like a router, which dropped its H3 clusters and H5 links).
   await fetchCodeKinds(rpc, [...new Set([...withdrawals.map((w) => w.to), ...fundings.map((f) => f.from)])], tag, codeKind, o.concurrency);
-  const contracts = new Set<string>();
-  const delegated = new Set<string>();
-  for (const [addr, kind] of codeKind.entries()) {
-    if (kind === 'contract') contracts.add(addr);
-    else if (kind === 'delegated') delegated.add(addr);
-  }
+  const firstEvent = new Map<string, number>();
+  for (const w of withdrawals) firstEvent.set(w.to, Math.min(w.block, firstEvent.get(w.to) ?? Infinity));
+  for (const f of fundings) firstEvent.set(f.from, Math.min(f.block, firstEvent.get(f.from) ?? Infinity));
+  const codeThen = new KV<CodeKind>(join(dir, 'code-at-event.json'));
+  await fetchCodeKindsAt(
+    rpc,
+    [...codeKind.entries()].filter(([a, k]) => k === 'contract' && firstEvent.has(a)).map(([a]) => atBlockKey(a, firstEvent.get(a) as number)),
+    codeThen,
+    o.concurrency,
+  );
+  const { contracts, delegated } = splitCodeKinds(codeKind.entries(), firstEvent, (k) => codeThen.get(k));
 
   // 9. Analyze and write aggregate output.
   const registrations: Registration[] = decoded.registrations.map((r) => ({ registrant: r.registrant, block: r.blockNumber, registry: r.registry }));
   const results = analyze(
     { payments, withdrawals, fundings, registrations, contracts, delegated, preUsed },
-    { uniqueFeeMax: UNIQUE_FEE_MAX, cutoffBlock },
+    { uniqueFeeMax: UNIQUE_FEE_MAX, cutoffBlock, relayTokens: new Set((o.relayTokens ?? RELAY_TOKENS[cfg.name]).map((t) => t.toLowerCase())) },
   );
   const byYear: Record<string, number> = {};
   for (const p of payments) {

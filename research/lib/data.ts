@@ -111,6 +111,52 @@ export function fetchCodeKinds(rpc: Rpc, addrs: readonly string[], blockTag: str
   );
 }
 
+/** The key of an address's first event (the first withdrawal to it or funding from it), for fetchCodeKindsAt. */
+export const atBlockKey = (addr: string, block: number): string => `${addr}@${block}`;
+
+/**
+ * Contracts and EIP-7702 delegated addresses from the code read at the scan's end block (`now`). An address with an
+ * event (a withdrawal to it, a funding from it) counts as a contract only when it also had code at its first event
+ * (`then`, keyed by atBlockKey): a counterfactual wallet deployed after the withdrawals reached it is a user's wallet,
+ * not a router (bug bounty 9 Nov). Without a reading for that block it stays a contract, as before.
+ */
+export function splitCodeKinds(
+  now: Iterable<[string, CodeKind]>,
+  firstEvent: ReadonlyMap<string, number>,
+  then: (key: string) => CodeKind | undefined,
+): { contracts: Set<string>; delegated: Set<string> } {
+  const contracts = new Set<string>();
+  const delegated = new Set<string>();
+  for (const [addr, kind] of now) {
+    if (kind === 'delegated') delegated.add(addr);
+    if (kind !== 'contract') continue;
+    const at = firstEvent.get(addr);
+    const earlier = at === undefined ? undefined : then(atBlockKey(addr, at));
+    if (earlier === undefined || earlier === 'contract') contracts.add(addr);
+  }
+  return { contracts, delegated };
+}
+
+/** Code kind of each address at a given block (keys are "address@block"). Needs a node with old state (Alchemy). */
+export function fetchCodeKindsAt(rpc: Rpc, keys: readonly string[], cache: KV<CodeKind>, concurrency: number): Promise<void> {
+  return batchFill(
+    rpc,
+    keys,
+    cache,
+    (k) => {
+      const [addr, block] = k.split('@') as [string, string];
+      return { method: 'eth_getCode', params: [addr, hex(BigInt(block))] };
+    },
+    (r): CodeKind => {
+      const code = lc((r as string | null) ?? '0x');
+      if (code === '0x') return 'eoa';
+      return code.startsWith('0xef0100') ? 'delegated' : 'contract';
+    },
+    concurrency,
+    'code at event',
+  );
+}
+
 /** Nonce of each address just before a given block (keys are "address@block"). */
 export function fetchNoncesAt(rpc: Rpc, keys: readonly string[], cache: KV<number>, concurrency: number): Promise<void> {
   return batchFill(

@@ -50,7 +50,7 @@ export const RULES = {
   confirmations: 12,
   /** The previous file is compared per chain; a move beyond this factor stops the publish. */
   maxJumpFactor: 5,
-  /** Jump check only applies when both values are above this many USD. */
+  /** Jump check is skipped only when both values are below this many USD (a fall from above it still stops). */
   jumpFloorUsd: 1000,
   /** tvu.json older than this is hidden by the site (3 days). */
   maxAgeDays: 3,

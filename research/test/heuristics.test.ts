@@ -34,7 +34,8 @@ const dataset = (): Dataset => ({
   preUsed: new Set(fx.preUsed),
 });
 
-const opts = { uniqueFeeMax: UNIQUE_FEE_MAX, cutoffBlock: fx.CUTOFF_BLOCK };
+// T1 stands for a known token (USDC, ...): its relayed move (S10) is the owner's (bug bounty 9 Nov, relay tokens)
+const opts = { uniqueFeeMax: UNIQUE_FEE_MAX, cutoffBlock: fx.CUTOFF_BLOCK, relayTokens: new Set([fx.T1]) };
 
 test('every rule fires exactly where the fixture says', () => {
   assert.deepEqual(analyze(dataset(), opts), fx.expected);
