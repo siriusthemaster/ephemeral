@@ -2,42 +2,42 @@
  "schema": 1,
  "chains": {
   "ethereum": {
-   "lastBlock": 26397405,
+   "lastBlock": 26404448,
    "umbra": 25540,
-   "erc5564": 261,
+   "erc5564": 266,
    "span": 5000000,
    "complete": true
   },
   "arbitrum": {
-   "lastBlock": 523504161,
+   "lastBlock": 523796104,
    "umbra": 100194,
    "erc5564": 19,
    "span": 5000000,
    "complete": true
   },
   "optimism": {
-   "lastBlock": 159435166,
+   "lastBlock": 159477523,
    "umbra": 72277,
    "erc5564": 2,
    "span": 32000,
    "complete": true
   },
   "polygon": {
-   "lastBlock": 97175774,
+   "lastBlock": 97232250,
    "umbra": 102550,
    "erc5564": 9,
    "span": 5000000,
    "complete": true
   },
   "base": {
-   "lastBlock": 56393784,
+   "lastBlock": 56817355,
    "umbra": 7953,
    "erc5564": 655,
    "span": 5000000,
    "complete": true
   },
   "gnosis": {
-   "lastBlock": 49237825,
+   "lastBlock": 49254472,
    "umbra": 202,
    "erc5564": 3,
    "span": 5000000,
