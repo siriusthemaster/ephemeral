@@ -40,6 +40,17 @@ export const MULTICALL3 = '0xca11bde05977b3631167028862be2a173976ca11';
 export const UMBRA_TOPIC0 = '0x29877766fa2bfe3b90008d6d92f965eca91cbc5757ed775740e460799fb92219';
 export const ANNOUNCER_TOPIC0 = '0x5f0eab8057630ba7676c49b4f21a0231414e79474595be8e4c432fbf6bf0f4e7';
 
+/** Addresses nobody can spend from: the zero address, 0x…dEaD, the precompiles 0x…01 to 0x…11 and 0x…0100
+ *  (P256VERIFY), and the system address 0xff…fe. Lower case. Same list as the leak scanner's sinks. */
+const UNSPENDABLE = new Set<string>([
+  '0x0000000000000000000000000000000000000000',
+  '0x000000000000000000000000000000000000dead',
+  '0x0000000000000000000000000000000000000100',
+  '0xfffffffffffffffffffffffffffffffffffffffe',
+  ...Array.from({ length: 0x11 }, (_, i) => `0x${'0'.repeat(38)}${(i + 1).toString(16).padStart(2, '0')}`),
+]);
+export const isUnspendable = (a: string): boolean => UNSPENDABLE.has(a.toLowerCase());
+
 export const RULES = {
   /** Addresses whose current nonce is above this are not fresh stealth addresses. */
   maxNonce: 1000,

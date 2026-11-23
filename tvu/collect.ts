@@ -154,21 +154,35 @@ export async function run(o: RunOpts, d: Deps): Promise<RunResult> {
     // Then the largest holders and Umbra once more, all in ONE call, so at one block, and each keeps the smallest of
     // its reads (bug bounty 9 Nov: a pot moved back and forth between two addresses on every block could sit at each
     // of them for both of its reads and count twice). In one call a pot is at one place only. If the node refuses
-    // the call as too heavy, half as many of the largest holders are read together.
+    // the call as too heavy (or times out), it is tried once more at the same size, then half as many of the largest
+    // holders are read together. Every refusal is logged, and a run where the call was refused at every size publishes
+    // nothing (bug bounty 11 Nov: one slow answer halved the set, and a run without the third read logged nothing).
     const per = 1 + tokens.length;
     const top = kept.filter((v) => v.nativeUsd + v.tokensUsd > 0).sort((x, y) => y.nativeUsd + y.tokensUsd - (x.nativeUsd + x.tokensUsd));
+    let readTogetherOk = false;
     for (let k = Math.min(top.length, Math.floor(CALLS_PER_BATCH / per) - 1); k >= 0; k = k === 0 ? -1 : Math.floor(k / 2)) {
-      const together = await readTogether(rpc, c, tokens, top.slice(0, k).map((v) => v.address), prices, block);
-      if (together === null) continue;
+      const addresses = top.slice(0, k).map((v) => v.address);
+      let together = await readTogether(rpc, c, tokens, addresses, prices, block);
+      if (together === null) {
+        d.log(`${c.key}: the ${k} largest holders and Umbra in one call: refused, trying the same size once more`);
+        together = await readTogether(rpc, c, tokens, addresses, prices, block);
+      }
+      if (together === null) {
+        d.log(`${c.key}: the ${k} largest holders and Umbra in one call: refused twice`);
+        continue;
+      }
       for (const v of top.slice(0, k)) {
         const t = together.vals.get(v.address);
         v.nativeUsd = Math.min(v.nativeUsd, t?.nativeUsd ?? 0);
         v.tokensUsd = Math.min(v.tokensUsd, t?.tokensUsd ?? 0);
       }
-      umbra = { native: Math.min(umbra.native, together.umbra.native), tokens: Math.min(umbra.tokens, together.umbra.tokens) };
+      umbra = { tokens: Math.min(umbra.tokens, together.umbra.tokens) };
       if (k < top.length) d.log(`${c.key}: the ${k} largest of ${top.length} holders read together`);
+      readTogetherOk = true;
       break;
     }
+    if (!readTogetherOk)
+      throw new Error(`${c.key}: the third read (the largest holders and Umbra in one call) was refused at every size; TVU not published`);
     outliers.count += f.outliers.count;
     outliers.usd += f.outliers.usd;
     const r: ChainResult = {
@@ -176,11 +190,10 @@ export async function run(o: RunOpts, d: Deps): Promise<RunResult> {
       native: kept.reduce((x, v) => x + v.nativeUsd, 0),
       tokens: kept.reduce((x, v) => x + v.tokensUsd, 0),
       umbraPending: umbra.tokens,
-      umbraNative: umbra.native,
       addresses: addrs.length,
     };
     results.push(r);
-    d.log(`${c.key}: ${addrs.length} addresses, ${vals.length} with value, outliers ${f.outliers.count} (${Math.round(f.outliers.usd)} USD), native ${Math.round(r.native)}, tokens ${Math.round(r.tokens)}, umbra pending ${Math.round(r.umbraPending)} tokens, ${Math.round(r.umbraNative)} native`);
+    d.log(`${c.key}: ${addrs.length} addresses, ${vals.length} with value, outliers ${f.outliers.count} (${Math.round(f.outliers.usd)} USD), native ${Math.round(r.native)}, tokens ${Math.round(r.tokens)}, umbra pending ${Math.round(r.umbraPending)} tokens`);
   }
 
   // 5. build, check, publish

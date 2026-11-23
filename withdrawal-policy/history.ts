@@ -42,6 +42,8 @@ type BsTokenTransfer = {
   transaction_hash?: string | null;
   tx_hash?: string | null; // older Blockscout versions
   log_index?: string | number | null;
+  token?: { type?: string | null } | null; // 'ERC-20', 'ERC-721', 'ERC-1155', ...
+  block_number?: number | string | null;
 };
 type Page<T> = { items?: T[]; next_page_params?: Record<string, string | number | null> | null };
 
@@ -132,6 +134,10 @@ export function tokenCallRecipient(sender: string, input: unknown): string | nul
   return null;
 }
 
+/** A block number from the explorer (a number or a decimal string); null when missing or malformed. */
+const blockOf = (b: number | string | null | undefined): bigint | null =>
+  typeof b === 'number' && Number.isSafeInteger(b) && b >= 0 ? BigInt(b) : typeof b === 'string' && /^\d+$/.test(b) ? BigInt(b) : null;
+
 /** Everything one address sent: ETH with a value, token transfers, and what its zero-value transactions did.
  *  `txCount` = transactions it signed, as indexed. `indexed` identifies each token transfer the explorer has (see
  *  logKey/toKey), to compare with the node's logs. A transaction it signed that moved ETH counts as a send to `to` only
@@ -174,9 +180,16 @@ async function sentBy(
     return typeof full?.raw_input === 'string' ? full.raw_input : null;
   };
   const transfers = await pages<BsTokenTransfer>(base, `/addresses/${address}/token-transfers`, signal);
+  // recipients of token transfers that call them: an ERC-721 safe transfer calls onERC721Received and an ERC-1155
+  // transfer always calls onERC1155Received on a recipient with code, which can pass the token on in the same
+  // transaction, like a plain ETH send to a contract (bug bounty 21 Nov). An ERC-20 transfer calls nothing, so its
+  // recipient holds the tokens. A transfer whose token type the explorer does not name counts as one that calls.
+  const called: { to: string; at: bigint | null }[] = [];
   for (const t of transfers) {
     const to = t.to?.hash;
     if (to && t.from?.hash) out.push({ from: t.from.hash, to });
+    const kind = typeof t.token?.type === 'string' ? t.token.type.toUpperCase() : '';
+    if (to && (t.from?.hash ?? '').toLowerCase() === address.toLowerCase() && kind !== 'ERC-20') called.push({ to, at: blockOf(t.block_number) });
     const tx = t.transaction_hash ?? t.tx_hash;
     if (!tx) continue;
     const k = logKey(tx, t.log_index);
@@ -184,6 +197,11 @@ async function sentBy(
     else if (to) indexed.add(toKey(tx, to)); // no log index from this explorer version: match on transaction + recipient
   }
   let unattributed = 0;
+  for (const c of called) {
+    const code = codeOf ? await codeOf(c.to) : null;
+    const then = codeOf && c.at !== null && code !== null && !hasCode(code) ? await codeOf(c.to, c.at) : null;
+    if ((then !== null && hasCode(then)) || code === null || hasCode(code)) unattributed++;
+  }
   // An ETH send with calldata, or one that creates a contract, cannot be followed to its final recipient (27 Oct)
   for (const t of sends) {
     if (!t.to?.hash) {
@@ -200,7 +218,7 @@ async function sentBy(
       const code = codeOf ? await codeOf(t.to.hash) : null;
       // the code it had when the ETH arrived counts too: an EIP-7702 delegation that forwarded the ETH can be cleared
       // later (bug bounty 8 Nov). A node without that old state cannot answer; then the code now decides.
-      const at = typeof t.block_number === 'number' || (typeof t.block_number === 'string' && /^\d+$/.test(t.block_number)) ? BigInt(t.block_number) : null;
+      const at = blockOf(t.block_number);
       const then = codeOf && at !== null && code !== null && !hasCode(code) ? await codeOf(t.to.hash, at) : null;
       if (then !== null && hasCode(then)) unattributed++;
       else if (code === null || hasCode(code)) unattributed++;

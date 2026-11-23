@@ -163,8 +163,10 @@ test('the payment transaction is the one that moved the value, inside the window
     assert.equal(r.payments[0]?.txHash, h(7));
     assert.equal(r.payments[0]?.blockNumber, b);
   }
+  // outside the window: unfunded. After it, only a transfer the payer signed itself still counts (bug bounty 22 Nov,
+  // bounty-2311.test.ts), so here the late ETH comes from a stranger
   for (const b of [at - WINDOW_BEFORE_FIRST - 1, at + WINDOW_AFTER + 1]) {
-    const r = confirmTx([ann(S(4), 'ETH', null, 6, at)], byStealth([arrive(S(4), 7, b, null)]));
+    const r = confirmTx([ann(S(4), 'ETH', null, 6, at)], byStealth([arrive(S(4), 7, b, null, X)]));
     assert.equal(r.unfunded, 1, `block ${b - at}`);
   }
   // a later announcement of the same address only looks 2 blocks back: gas sent after the first payment is not a new payment
@@ -321,7 +323,10 @@ test('EPH-17 (Swaplane, 3 Nov): a later, really funded ETH payment does not hide
   const at = C + 90_000;
   const logs = [ann(S(15), 'TOKEN', TA, 91, at), ann(S(15), 'ETH', null, 93, at + 40)];
   const transfers = [arrive(S(15), 91, at, TA, P), arrive(S(15), 92, at + 41, null, X)]; // 1 wei of ETH from a stranger, later
-  const r = confirmTx(logs, byStealth(transfers));
+  // the stranger signed the later announcement and sent the wei: his own small payment (since 21 Nov another party's
+  // ETH is no payment of a later announcement, so the signer of h(93) is stated here)
+  const signer: Record<string, string> = { [h(91)]: P, [h(92)]: X, [h(93)]: X };
+  const r = confirmPayments(logs, byStealth(transfers), (hash) => signer[hash]);
   assert.deepEqual(r.payments.map((p) => p.asset).sort(), ['ETH', 'TOKEN']);
   const m = analyze(world(toPayments(r.payments, { [h(91)]: P, [h(92)]: X }), [out(S(15), P, 'token', TA, 190, at + 100)]), opts).all;
   assert.equal(m.withdrawn, 1);
