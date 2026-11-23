@@ -3,7 +3,7 @@
  * then the spoof filters (contract code, nonce, single address too large).
  */
 import { decodeFunctionResult, encodeFunctionData, parseAbi } from 'viem';
-import { MULTICALL3, RULES, UMBRA, type ChainCfg, type TokenCfg } from './config.ts';
+import { isUnspendable, MULTICALL3, RULES, UMBRA, type ChainCfg, type TokenCfg } from './config.ts';
 import type { Rpc } from './rpc.ts';
 
 export const ABI = parseAbi([
@@ -152,9 +152,7 @@ export async function readBalances(
 }
 
 export interface UmbraPending {
-  /** the native currency Umbra holds (ETH, POL or xDAI payments) */
-  native: number;
-  /** the listed tokens Umbra holds */
+  /** the listed tokens Umbra holds for stealth owners who have not withdrawn yet */
   tokens: number;
 }
 
@@ -168,11 +166,13 @@ const valueAt = (res: (`0x${string}` | null)[], base: number, c: ChainCfg, token
   tokens: tokens.reduce((sum, t, k) => sum + toUsd(u256(res[base + 1 + k] ?? null), t.decimals, tokenPrice(t, p)), 0),
 });
 
-/** Value Umbra holds for stealth owners who have not withdrawn yet: its native balance (native payments wait there
- *  too; bug bounty 9 Nov, it was not read) and its balance of the token list. */
+/** Value Umbra holds for stealth owners who have not withdrawn yet: its balance of the token list. Its native balance
+ *  is not theirs: Umbra's sendEth passes a native payment on to the stealth address in the same transaction, so what
+ *  stays in the contract is the anti-spam toll of each announcement, which its toll collector sweeps (bug bounty
+ *  21 Nov; the 9 Nov change that counted it as pending payments is reversed). */
 export async function readUmbraPending(rpc: Rpc, c: ChainCfg, tokens: TokenCfg[], p: Prices, block: string): Promise<UmbraPending> {
   const res = await multicall(rpc, balanceCalls(UMBRA, tokens), block);
-  return valueAt(res, 0, c, tokens, p);
+  return { tokens: valueAt(res, 0, c, tokens, p).tokens };
 }
 
 /** Addresses and the Umbra contract read together in ONE Multicall3 call, so all at one block: one pot is at one of
@@ -199,7 +199,7 @@ export async function readTogether(
     const v = valueAt(res, i * per, c, tokens, p);
     vals.set(address, { address, nativeUsd: v.native, tokensUsd: v.tokens });
   });
-  return { vals, umbra: valueAt(res, addresses.length * per, c, tokens, p) };
+  return { vals, umbra: { tokens: valueAt(res, addresses.length * per, c, tokens, p).tokens } };
 }
 
 /** EIP-7702 delegation markers (0xef0100 + address) belong to ordinary accounts, not contracts. */
@@ -210,10 +210,19 @@ export interface Filtered {
   outliers: { count: number; usd: number };
 }
 
-/** Spoof protection. See METHOD.md. Contract code and nonce are read only for addresses that hold value. */
-export async function applyFilters(rpc: Rpc, vals: AddrValue[], p: Prices, block: string, step = 100): Promise<Filtered> {
+/** Spoof protection. See METHOD.md. Contract code and nonce are read only for addresses that hold value. An address
+ *  nobody can spend from (the zero address, 0x…dEaD, a precompile, the system address) is left out first: anyone can
+ *  announce it, and what it holds is no stealth owner's (bug bounty 13 Nov). */
+export async function applyFilters(rpc: Rpc, all: AddrValue[], p: Prices, block: string, step = 100): Promise<Filtered> {
   const kept: AddrValue[] = [];
   const outliers = { count: 0, usd: 0 };
+  const vals: AddrValue[] = [];
+  for (const v of all) {
+    if (isUnspendable(v.address)) {
+      outliers.count++;
+      outliers.usd += v.nativeUsd + v.tokensUsd;
+    } else vals.push(v);
+  }
   const maxUsd = RULES.maxEthEquivalent * p.eth;
   for (let i = 0; i < vals.length; i += step) {
     const slice = vals.slice(i, i + step);

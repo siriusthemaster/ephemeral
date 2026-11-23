@@ -65,22 +65,24 @@ test('control: a pot that does not move is counted once', async () => {
   assert.equal(r.tvu!.parts.stealthNative, 200_000);
 });
 
-test('accpoww 9 Nov: the native currency Umbra holds for stealth owners is counted', async () => {
+// accpoww 9 Nov asked for Umbra's native balance to be counted as pending payments; Rusdi 21 Nov showed it is the
+// announcement tolls (Umbra passes native payments on at once), so it is not counted (bounty-2311.test.ts)
+test('Rusdi 21 Nov (reverses accpoww 9 Nov): Umbra s native balance is tolls, only its tokens are pending payments', async () => {
   const m = new MockChain();
   m.head = 1000;
   m.logs.push(annLog(addr(0xabc), addr(0x77), 300));
-  m.eth.set(UMBRA, 3n * ETH); // 6,000 USD of native payments waiting in Umbra
+  m.eth.set(UMBRA, 3n * ETH); // 6,000 USD of tolls in Umbra
   m.umbraUsdc = 70_000_000n; // 70 USD of token payments
   const r = await run(opts(), deps(m));
-  assert.equal(r.tvu!.parts.umbraPendingNative, 6_000);
+  assert.equal('umbraPendingNative' in r.tvu!.parts, false);
   assert.equal(r.tvu!.parts.umbraPendingTokens, 70);
-  assert.equal(r.tvu!.totalUsd, 6_070);
-  assert.equal(r.tvu!.byChain.ethereum!.usd, 6_070);
+  assert.equal(r.tvu!.totalUsd, 70);
+  assert.equal(r.tvu!.byChain.ethereum!.usd, 70);
 });
 
 test('Akbar 9 Nov: the jump check is skipped only when both values are below the floor, as the method now says', () => {
   const t = (usd: number) =>
-    buildTvu([{ key: 'ethereum', native: usd, tokens: 0, umbraPending: 0, umbraNative: 0, addresses: 3 }], { count: 0, usd: 0 }, PRICES, 1_800_000_000);
+    buildTvu([{ key: 'ethereum', native: usd, tokens: 0, umbraPending: 0, addresses: 3 }], { count: 0, usd: 0 }, PRICES, 1_800_000_000);
   sanityCheck(t(900), t(100)); // both below 1,000 USD: no check
   // a fall from above the floor to near zero is the shape of a failed read: it stops, and says how to go on
   assert.throws(() => sanityCheck(t(10), t(5_000)), /TVU_ALLOW_JUMP=1/);

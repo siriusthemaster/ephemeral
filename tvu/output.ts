@@ -7,8 +7,6 @@ export interface ChainResult {
   native: number;
   tokens: number;
   umbraPending: number;
-  /** native currency Umbra holds (bug bounty 9 Nov) */
-  umbraNative: number;
   addresses: number;
 }
 
@@ -17,7 +15,7 @@ export interface Tvu {
   asOf: string;
   label: 'all protocols combined';
   totalUsd: number;
-  parts: { stealthNative: number; stealthTokens: number; umbraPendingTokens: number; umbraPendingNative: number };
+  parts: { stealthNative: number; stealthTokens: number; umbraPendingTokens: number };
   byChain: Record<string, { usd: number; addresses: number }>;
   prices: { ETH: number; POL: number };
   rules: { maxNonce: number; maxEthEquivalent: number; excludeContracts: boolean };
@@ -28,26 +26,24 @@ export interface Tvu {
 const r2 = (n: number): number => Math.round(n * 100) / 100;
 
 export function buildTvu(chains: ChainResult[], outliers: { count: number; usd: number }, prices: Prices, asOfSec: number): Tvu {
-  const parts = { stealthNative: 0, stealthTokens: 0, umbraPendingTokens: 0, umbraPendingNative: 0 };
+  const parts = { stealthNative: 0, stealthTokens: 0, umbraPendingTokens: 0 };
   const byChain: Tvu['byChain'] = {};
   for (const c of chains) {
     parts.stealthNative += c.native;
     parts.stealthTokens += c.tokens;
     parts.umbraPendingTokens += c.umbraPending;
-    parts.umbraPendingNative += c.umbraNative;
-    byChain[c.key] = { usd: r2(c.native + c.tokens + c.umbraPending + c.umbraNative), addresses: c.addresses };
+    byChain[c.key] = { usd: r2(c.native + c.tokens + c.umbraPending), addresses: c.addresses };
   }
   const rounded = {
     stealthNative: r2(parts.stealthNative),
     stealthTokens: r2(parts.stealthTokens),
     umbraPendingTokens: r2(parts.umbraPendingTokens),
-    umbraPendingNative: r2(parts.umbraPendingNative),
   };
   return {
     schema: 1,
     asOf: new Date(asOfSec * 1000).toISOString().replace(/\.\d+Z$/, 'Z'),
     label: 'all protocols combined',
-    totalUsd: r2(parts.stealthNative + parts.stealthTokens + parts.umbraPendingTokens + parts.umbraPendingNative),
+    totalUsd: r2(parts.stealthNative + parts.stealthTokens + parts.umbraPendingTokens),
     parts: rounded,
     byChain,
     prices: { ETH: prices.eth, POL: prices.pol },
