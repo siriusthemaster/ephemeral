@@ -42,7 +42,7 @@ import {
 } from './lib/data.ts';
 import { confirmPayments, neededTxs, WINDOW_BEFORE_FIRST } from './lib/confirm.ts';
 import { decodeLogs, type PaymentLog } from './lib/decode.ts';
-import { analyze, type Funding, type Payment, type Registration, type Withdrawal } from './lib/heuristics.ts';
+import { analyze, firstEvents, type Funding, type Payment, type Registration, type Withdrawal } from './lib/heuristics.ts';
 import { scanLogs, type RawLog } from './lib/logs.ts';
 import { fingerprint, METHOD_NOTES, toMarkdown, type Summary } from './lib/report.ts';
 import { Rpc } from './lib/rpc.ts';
@@ -268,9 +268,8 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
   //    had code at that event counts as a contract (bug bounty 9 Nov: a counterfactual wallet deployed after the
   //    withdrawals reached it was left out like a router, which dropped its H3 clusters and H5 links).
   await fetchCodeKinds(rpc, [...new Set([...withdrawals.map((w) => w.to), ...fundings.map((f) => f.from)])], tag, codeKind, o.concurrency);
-  const firstEvent = new Map<string, number>();
-  for (const w of withdrawals) firstEvent.set(w.to, Math.min(w.block, firstEvent.get(w.to) ?? Infinity));
-  for (const f of fundings) firstEvent.set(f.from, Math.min(f.block, firstEvent.get(f.from) ?? Infinity));
+  const relaySet = new Set((o.relayTokens ?? RELAY_TOKENS[cfg.name]).map((t) => t.toLowerCase()));
+  const firstEvent = firstEvents(withdrawals, fundings, relaySet);
   const codeThen = new KV<CodeKind>(join(dir, 'code-at-event.json'));
   await fetchCodeKindsAt(
     rpc,
@@ -284,7 +283,7 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
   const registrations: Registration[] = decoded.registrations.map((r) => ({ registrant: r.registrant, block: r.blockNumber, registry: r.registry }));
   const results = analyze(
     { payments, withdrawals, fundings, registrations, contracts, delegated, preUsed },
-    { uniqueFeeMax: UNIQUE_FEE_MAX, cutoffBlock, relayTokens: new Set((o.relayTokens ?? RELAY_TOKENS[cfg.name]).map((t) => t.toLowerCase())) },
+    { uniqueFeeMax: UNIQUE_FEE_MAX, cutoffBlock, relayTokens: relaySet },
   );
   const byYear: Record<string, number> = {};
   for (const p of payments) {

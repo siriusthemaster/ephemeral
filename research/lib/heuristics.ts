@@ -251,6 +251,20 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
   return out;
 }
 
+/** The block of the first withdrawal to each recipient and of the first funding from each funder, where scan.ts reads
+ *  whether it already had code. Only events a fake token cannot make count: a token move "from" a stealth address that
+ *  the address did not sign, of a token outside `relayTokens`, can be a stranger's own log (see `views`), and an
+ *  earlier forged one moved the first event before the real one (bug bounty 21 Nov). */
+export function firstEvents(withdrawals: readonly Withdrawal[], fundings: readonly Funding[], relayTokens: ReadonlySet<string>): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const w of withdrawals) {
+    if (w.kind === 'token' && w.txFrom !== w.stealth && !(w.token !== null && relayTokens.has(w.token))) continue;
+    out.set(w.to, Math.min(w.block, out.get(w.to) ?? Infinity));
+  }
+  for (const f of fundings) out.set(f.from, Math.min(f.block, out.get(f.from) ?? Infinity));
+  return out;
+}
+
 function registrants(ds: Dataset, scope: Scope): Set<string> {
   const set = new Set<string>();
   for (const r of ds.registrations) {
@@ -261,13 +275,23 @@ function registrants(ds: Dataset, scope: Scope): Set<string> {
   return set;
 }
 
-const stealthSets = new WeakMap<object, { n: number; set: Set<string> }>();
+const stealthSets = new WeakMap<object, WeakMap<Scope, { n: number; set: Set<string> }>>();
 /** A contract among recipients and funders that H3 and H5 leave out (routers, bridges, hot wallets). A stealth address
- *  with code (a smart account or a delegation) is ours to measure, not such a contract (bug bounty 8 Nov, Znax). */
-function foreignContract(ds: Dataset, a: string): boolean {
+ *  with code (a smart account or a delegation) is ours to measure, not such a contract (bug bounty 8 Nov, Znax), but
+ *  only one this scope measures: a payment to an address that had sent transactions before it (`preUsed`, which every
+ *  deployed contract has) or one outside the scope's sources or blocks does not make a router ours (bug bounty 21 Nov:
+ *  one announcement and a unit of any token to a router put it among the payments and brought it back into H3 and H5). */
+function foreignContract(ds: Dataset, scope: Scope, a: string): boolean {
   if (!ds.contracts.has(a)) return false;
-  let c = stealthSets.get(ds.payments);
-  if (!c || c.n !== ds.payments.length) stealthSets.set(ds.payments, (c = { n: ds.payments.length, set: new Set(ds.payments.map((p) => p.stealth)) }));
+  let byScope = stealthSets.get(ds.payments);
+  if (!byScope) stealthSets.set(ds.payments, (byScope = new WeakMap()));
+  let c = byScope.get(scope);
+  if (!c || c.n !== ds.payments.length) {
+    const set = new Set<string>();
+    for (const p of ds.payments)
+      if (!ds.preUsed.has(p.stealth) && scope.sources.has(p.source) && (scope.asOfBlock === undefined || p.block < scope.asOfBlock)) set.add(p.stealth);
+    byScope.set(scope, (c = { n: ds.payments.length, set }));
+  }
   return !c.set.has(a);
 }
 
@@ -340,7 +364,7 @@ function measure(ds: Dataset, scope: Scope, only?: (v: StealthView) => boolean):
           !selfTxs.has(f.txHash) &&
           f.from !== v.addr &&
           !v.senders.has(f.from) && // the payer topping up gas reveals nothing new
-          !foreignContract(ds, f.from) && // routers, bridges, exchanges' hot contracts
+          !foreignContract(ds, scope, f.from) && // routers, bridges, exchanges' hot contracts
           (regs.has(f.from) || allDests.has(f.from)),
       );
       if (h5) m.h5++;
@@ -401,7 +425,7 @@ export function analyze(ds: Dataset, opts: AnalyzeOptions): Analysis {
     const d = [...dests][0] as string;
     // a sink nobody owns (zero, 0x…dEaD, a precompile, the system address) collects nothing: two strangers burning
     // there are not one collector (bug bounty 3 Nov)
-    if (foreignContract(ds, d) || d === v.addr || isSink(d)) continue;
+    if (foreignContract(ds, allScope, d) || d === v.addr || isSink(d)) continue;
     groups.set(d, (groups.get(d) ?? 0) + 1);
   }
   let clusteredStealth = 0;
