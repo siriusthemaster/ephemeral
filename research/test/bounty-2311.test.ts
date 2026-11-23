@@ -52,7 +52,7 @@ const confirm = (logs: PaymentLog[], transfers: TransferLite[], signers: Record<
 const rows = (r: { payments: PaymentLog[] }) => r.payments.map((p) => [p.asset, p.txHash]);
 
 // ------------------------------------------------------------------ (1) late finish (confirm.ts)
-test('Vijay 22 Nov: a payment the payer finished 13 blocks after its own unfunded announcement is its payment', () => {
+test('0xvijay 22 Nov: a payment the payer finished 13 blocks after its own unfunded announcement is its payment', () => {
   const A = C + 1_000;
   for (const [label, token] of [['ETH', null], ['token', TA]] as const) {
     const logs = [ann(S(1), token === null ? 'ETH' : 'TOKEN', token, 1, A)];
@@ -71,7 +71,7 @@ test('Vijay 22 Nov: a payment the payer finished 13 blocks after its own unfunde
   assert.deepEqual([far.payments.length, far.unfunded], [0, 1]);
 });
 
-test('Vijay 22 Nov: the late reach ends before the payer s next announcement of the address, which reads its own payment', () => {
+test('0xvijay 22 Nov: the late reach ends before the payer s next announcement of the address, which reads its own payment', () => {
   const A = C + 2_000;
   const logs = [ann(S(2), 'ETH', null, 1, A), ann(S(2), 'ETH', null, 3, A + 20)];
   const r = confirm(logs, [arrive(S(2), 4, A + 21, null, P)], { [h(1)]: P, [h(3)]: P, [h(4)]: P });
@@ -79,7 +79,7 @@ test('Vijay 22 Nov: the late reach ends before the payer s next announcement of 
   assert.equal(r.unfunded, 1); // the first announcement, as before
 });
 
-test('Vijay 22 Nov: a stranger s funded announcement between the payer s announcement and its late payment hides nothing', () => {
+test('0xvijay 22 Nov: a stranger s funded announcement between the payer s announcement and its late payment hides nothing', () => {
   const A = C + 3_000;
   const logs = [ann(S(3), 'TOKEN', TA, 10, A), ann(S(3), 'TOKEN', TA, 11, A + 5)];
   const transfers = [arrive(S(3), 11, A + 5, null, X), arrive(S(3), 12, A + 20, TA, P)]; // the stranger's wei, then the payer's token
@@ -89,7 +89,7 @@ test('Vijay 22 Nov: a stranger s funded announcement between the payer s announc
 });
 
 // ------------------------------------------------------------------ (2) residual reach of a later announcement
-test('farik 14 Nov, Vijay 22 Nov: a payment between the first funded window and the later announcement s look-back counts', () => {
+test('farikferis 14 Nov, 0xvijay 22 Nov: a payment between the first funded window and the later announcement s look-back counts', () => {
   const B = C + 4_000;
   const logs = [ann(S(4), 'UNKNOWN', null, 20, B), ann(S(4), 'ETH', null, 22, B + 34)];
   const transfers = [arrive(S(4), 20, B, null, G), arrive(S(4), 21, B + 29, null, P)]; // the griefer's 1 wei, the real 0.04 ETH
@@ -135,7 +135,7 @@ test('Rusdi 21 Nov: a zero-value announcement next to a registrant s gas top-up 
   assert.deepEqual([m.withdrawn, m.singleWithdrawal, m.h5], [1, 1, 1]);
 });
 
-test('Nini 12 Nov (3C): the payer s ETH is the payment, a stranger s ETH in the same window is not part of it', () => {
+test('niniitowok 12 Nov (3C): the payer s ETH is the payment, a stranger s ETH in the same window is not part of it', () => {
   const B = C + 7_000;
   const logs = [ann(S(7), 'ETH', null, 50, B)];
   const transfers = [arrive(S(7), 51, B + 1, null, P), arrive(S(7), 52, B + 2, null, X)];
