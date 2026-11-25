@@ -30,7 +30,7 @@ npm run scan:sepolia        # smoke test on Sepolia
 npm run scan                # Ethereum mainnet, full history
 ```
 
-The first run fixes the end block at the latest finalized block (stored in `.cache/<chain>/meta.json`), so every later run reads the same range. An interrupted scan resumes from `.cache/`.
+Without `--to-block` a run ends at the latest finalized block (stored in `.cache/<chain>/meta.json`). An interrupted scan resumes from `.cache/` with its own end block; once a run has finished, the next run without `--to-block` reads the new finalized block and starts clean if it moved. Pass `--to-block` to read a fixed range again.
 
 **Reproducibility check:** re-download the same range from scratch and compare fingerprints.
 

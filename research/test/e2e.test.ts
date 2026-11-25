@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -19,6 +19,8 @@ import * as fx from './fixture.ts';
 
 const cfg = CHAINS.sepolia;
 const FINALIZED = 5_600_000;
+/** what the node answers for the finalized tag: moved by the end-block tests below */
+let head = FINALIZED;
 const MAX_RANGE = 400_000n;
 
 interface FakeLog {
@@ -129,7 +131,7 @@ function handle(method: string, params: any[]): { result?: unknown; error?: { co
     case 'eth_getTransactionByHash':
       return { result: txs.get(params[0]) ?? null };
     case 'eth_getBlockByNumber': {
-      const n = params[0] === 'finalized' ? FINALIZED : Number(BigInt(params[0]));
+      const n = params[0] === 'finalized' ? head : Number(BigInt(params[0]));
       return { result: { number: hex(n), timestamp: hex(fx.timeOf(n)) } };
     }
     case 'eth_getTransactionCount': {
@@ -227,4 +229,39 @@ test('asking for another end block starts clean instead of mixing caches', async
   assert.equal(other.payments.erc5564, 0);
   const back = await runScan({ ...base(), toBlock: BigInt(FINALIZED) });
   assert.deepEqual(back.results.all, fx.expected.all);
+});
+
+test('0xasuma 24 Nov: without --to-block a later run reads the new finalized block instead of the previous end block', async () => {
+  const done = await runScan(base());
+  assert.equal(done.blocks.to, String(FINALIZED));
+  head = FINALIZED + 1_000;
+  try {
+    const next = await runScan(base());
+    assert.equal(next.blocks.to, String(FINALIZED + 1_000), 'the default path follows the chain');
+    assert.deepEqual(next.results.all, fx.expected.all);
+    // an explicit --to-block still pins the range and reuses nothing from another end block
+    const pinned = await runScan({ ...base(), toBlock: BigInt(FINALIZED) });
+    assert.equal(pinned.blocks.to, String(FINALIZED));
+  } finally {
+    head = FINALIZED;
+  }
+});
+
+test('0xasuma 24 Nov: an unfinished run still resumes at its own end block', async () => {
+  const meta = join(work, 'cache', cfg.name, 'meta.json');
+  head = FINALIZED + 2_000;
+  try {
+    const first = await runScan(base());
+    assert.equal(first.blocks.to, String(FINALIZED + 2_000));
+    // the run is cut short: meta.json says so
+    writeFileSync(meta, JSON.stringify({ ...JSON.parse(readFileSync(meta, 'utf8')), complete: false }));
+    head = FINALIZED + 3_000;
+    const resumed = await runScan(base());
+    assert.equal(resumed.blocks.to, String(FINALIZED + 2_000), 'resumed, not restarted at the new head');
+    assert.equal(JSON.parse(readFileSync(meta, 'utf8')).complete, true);
+    const fresh = await runScan(base());
+    assert.equal(fresh.blocks.to, String(FINALIZED + 3_000), 'once finished, the next run reads the head again');
+  } finally {
+    head = FINALIZED;
+  }
 });

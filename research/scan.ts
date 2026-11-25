@@ -68,6 +68,19 @@ interface Meta {
   params: string;
   toBlock: string;
   cutoffBlock?: string;
+  /** false while a run with this end block has not finished; a cache without it counts as finished */
+  complete?: boolean;
+}
+
+/** Whether the cache in meta.json can serve this run (bug bounty 24 Nov: without --to-block a later run kept the end
+ *  block of the previous one, so a repeated `npm run scan` reported an old range as the latest). Same code version and
+ *  fetch settings, and the same end block: the one asked for, or without --to-block the latest finalized block, except
+ *  that a run that did not finish resumes at its own end block. `finalized` is read only when needed. */
+export async function cacheUsable(meta: Meta, params: string, toBlock: bigint | undefined, finalized: () => Promise<bigint>): Promise<boolean> {
+  if (meta.version !== SCAN_VERSION || meta.params !== params) return false;
+  if (toBlock !== undefined) return BigInt(meta.toBlock) === toBlock;
+  if (meta.complete === false) return true;
+  return BigInt(meta.toBlock) === (await finalized());
 }
 
 /** Hash of the fetch settings stored in meta.json: a run with other settings starts clean. The arrivals range starts
@@ -104,17 +117,19 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
   const chainId = hexToNumber(await rpc.call<string>('eth_chainId', []));
   if (chainId !== cfg.chainId) throw new Error(`RPC is on chain ${chainId}, expected ${cfg.chainId} (${cfg.name})`);
 
-  // The cache is only valid for the same code version, fetch parameters and end block.
+  // The cache is only valid for the same code version, fetch parameters and end block (cacheUsable).
   const params = cacheParams(cfg);
+  let finalized: bigint | undefined;
+  const latestFinalized = async (): Promise<bigint> => (finalized ??= await finalizedBlock(rpc));
   let meta = o.fresh ? undefined : readJson<Meta>(join(dir, 'meta.json'));
-  if (meta && (meta.version !== SCAN_VERSION || meta.params !== params || (o.toBlock !== undefined && BigInt(meta.toBlock) !== o.toBlock))) {
+  if (meta && !(await cacheUsable(meta, params, o.toBlock, latestFinalized))) {
     log('Cache was made with other settings or another end block; starting clean.');
     meta = undefined;
-  }
+  } else if (meta && o.toBlock === undefined && meta.complete === false) log(`Resuming the unfinished run to block ${meta.toBlock}.`);
   if (!meta) {
     rmSync(dir, { recursive: true, force: true });
-    const toBlock = o.toBlock ?? (await finalizedBlock(rpc));
-    meta = { version: SCAN_VERSION, params, toBlock: toBlock.toString() };
+    const toBlock = o.toBlock ?? (await latestFinalized());
+    meta = { version: SCAN_VERSION, params, toBlock: toBlock.toString(), complete: false };
     writeJson(join(dir, 'meta.json'), meta);
   }
   const toBlock = BigInt(meta.toBlock);
@@ -347,6 +362,7 @@ export async function runScan(o: ScanOptions): Promise<Summary> {
   mkdirSync(o.outDir, { recursive: true });
   writeJson(join(o.outDir, 'summary.json'), summary);
   writeFileSync(join(o.outDir, 'summary.md'), toMarkdown(summary));
+  writeJson(join(dir, 'meta.json'), { ...meta, complete: true });
   return summary;
 }
 
