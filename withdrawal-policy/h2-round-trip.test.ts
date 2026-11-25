@@ -14,6 +14,7 @@ const base: GuardInput = {
   walletAddress: '0x2222222222222222222222222222222222222222',
   payer: PAYER,
   payers: [CALLER, FUNDER],
+  payerKnown: true,
   ownStealthAddresses: ['0x1111111111111111111111111111111111111111'],
   usedDestinations: [],
   historyComplete: true,
@@ -35,8 +36,10 @@ test('every known payer is blocked as a destination, in any letter case, never o
 test('a payer among `payers` blocks with the round trip text even while `payer` itself is unknown', () => {
   const c = h2({ ...base, payer: undefined, destination: FUNDER });
   assert.equal(c.level, 'block');
-  assert.equal(c.text, 'H2: this address sent you the payment. Sending it back links both ends.');
-  assert.match(h2({ ...base, payer: undefined }).text, /cannot check, payer unknown/);
+  assert.equal(c.text, 'H2: this address paid you. Sending the payment back links both ends.');
+  // client 0.2.19: `payerKnown` says whether every payer was read; until then every destination blocks
+  assert.equal(h2({ ...base, payer: undefined, payerKnown: false }).level, 'block');
+  assert.match(h2({ ...base, payer: undefined, payerKnown: false }).text, /still reading who paid you/);
 });
 
 test('control: a destination that paid nothing passes H2', () => {

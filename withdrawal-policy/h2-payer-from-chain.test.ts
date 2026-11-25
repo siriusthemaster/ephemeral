@@ -104,6 +104,7 @@ const guardFor = (f: Funding, over: Partial<GuardInput> = {}): GuardInput => ({
   walletAddress: KEY,
   payer: f.payersKnown ? f.payers[0] : undefined,
   payers: f.payers,
+  payerKnown: f.payersKnown,
   ownStealthAddresses: [S],
   usedDestinations: [],
   historyComplete: true,

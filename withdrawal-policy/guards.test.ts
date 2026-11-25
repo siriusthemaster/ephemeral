@@ -7,6 +7,7 @@ const base = {
   stealthAddress: '0x1111111111111111111111111111111111111111',
   walletAddress: '0x2222222222222222222222222222222222222222',
   payer: '0x3333333333333333333333333333333333333333',
+  payerKnown: true,
   ownStealthAddresses: ['0x1111111111111111111111111111111111111111', '0x4444444444444444444444444444444444444444'],
   usedDestinations: ['0x5555555555555555555555555555555555555555'],
   historyComplete: true,
@@ -165,7 +166,7 @@ test('H1 fail closed: a missing key wallet blocks every destination', () => {
       const c = withdrawChecks({ ...clean, walletAddress, isToken });
       const h1 = c.find((x) => x.id === 'H1')!;
       assert.equal(h1.level, 'block', String(walletAddress));
-      assert.match(h1.text, /cannot check, key wallet unknown/);
+      assert.match(h1.text, /key wallet is not known, so this destination cannot be checked/);
       assert.equal(blocking(c), true);
     }
   }
@@ -181,7 +182,7 @@ test('H2 fail closed: a missing payer blocks every destination, and Withdraw sta
       const c = withdrawChecks({ ...clean, payer, isToken });
       const h2 = c.find((x) => x.id === 'H2')!;
       assert.equal(h2.level, 'block', String(payer));
-      assert.match(h2.text, /cannot check, payer unknown. Withdraw stays locked until the payer is known/);
+      assert.match(h2.text, /payer is not known, so this destination cannot be checked. Withdraw stays locked until the payer is known/);
       assert.equal(blocking(c), true);
     }
   }

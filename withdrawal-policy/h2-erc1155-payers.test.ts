@@ -50,6 +50,7 @@ const guard = (g: Partial<GuardInput>): GuardInput => ({
   stealthAddress: S,
   walletAddress: KEY,
   payer: CALLER,
+  payerKnown: true,
   ownStealthAddresses: [S, S2],
   usedDestinations: [],
   historyComplete: true,

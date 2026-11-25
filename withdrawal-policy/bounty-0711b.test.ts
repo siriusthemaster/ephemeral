@@ -65,6 +65,7 @@ const guard = (g: Partial<GuardInput>): GuardInput => ({
   stealthAddress: S,
   walletAddress: KEY,
   payer: PAYER,
+  payerKnown: true,
   ownStealthAddresses: [S, S2],
   usedDestinations: [],
   historyComplete: true,
@@ -86,7 +87,8 @@ test('unspendable: the P256VERIFY precompile and the system address block like t
 
 test('a token withdrawal without its token contract is blocked: cannot check', () => {
   assert.equal(line({ isToken: true, gasFrom: [], tokenAddress: undefined }, 'token')?.level, 'block');
-  assert.equal(line({ isToken: true, gasFrom: [], tokenAddress: TOKEN }, 'token'), undefined);
+  // the client's own token check (0.2.8) needs the token confirmed; with it, nothing else blocks on the token
+  assert.equal(line({ isToken: true, gasFrom: [], tokenAddress: TOKEN, token: { hasCode: true, standardTransfer: true } }, 'token'), undefined);
   // control: sending the token to its own contract is still the burn block
   assert.equal(withdrawChecks(guard({ isToken: true, tokenAddress: TOKEN, destination: TOKEN }))[0]?.id, 'burn');
 });
