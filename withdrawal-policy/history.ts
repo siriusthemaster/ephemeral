@@ -99,11 +99,18 @@ async function pages<T>(base: string, path: string, signal?: AbortSignal): Promi
     url.searchParams.set('filter', 'from');
     for (const [k, v] of Object.entries(next ?? {})) if (v !== null && v !== undefined) url.searchParams.set(k, String(v));
     const page = await get<Page<T>>(url, signal);
-    if (!page) break;
+    // an empty answer in the middle of the list is not its end (client 0.2.19, bug bounty #6): the history is not
+    // complete
+    if (!page) {
+      if (p === 0) break;
+      throw new Failed('page');
+    }
     out.push(...(page.items ?? []));
     next = page.next_page_params;
-    if (!next || !(page.items ?? []).length) break;
+    if (!next || !(page.items ?? []).length) return out;
   }
+  // more pages than read: a cut list is never a complete history (client 0.2.19, bug bounty #6)
+  if (next) throw new Failed('pages');
   return out;
 }
 

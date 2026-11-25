@@ -5,10 +5,12 @@
 //     limited payment scan never reads as complete history (scanCoverage).
 // (2) The EIP-4788 and EIP-2935 system contracts are unspendable destinations (Marwan, 22 Nov).
 // (3) What stays stricter here than in the client: a token withdrawal without its token contract blocks.
-import { test } from 'node:test';
+// (4) history.ts takes the client's rule for a cut explorer list (#6).
+import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getAddress, type Hex } from 'viem';
 import { H1_REGISTRY_UNREAD, H2_VIA_CONTRACT, blocking, isUnspendable, l1Of, scanCoverage, withdrawChecks, type GuardInput } from './guards.ts';
+import { loadWithdrawalHistory, type TokenLogCheck } from './history.ts';
 
 const KEY = '0x1111111111111111111111111111111111111111' as Hex;
 const DEST = '0x2222222222222222222222222222222222222222' as Hex;
@@ -110,4 +112,39 @@ test('a token withdrawal without its token contract still blocks here (cannot ch
     assert.deepEqual([c.level, c.text], ['block', 'Cannot check, token contract unknown. Withdraw stays locked until it is known.']);
   }
   assert.equal(line('token', base({ ...g, tokenAddress: TOKEN })), undefined);
+});
+
+// ------------------------------------------------------------------ (4) history.ts: a cut explorer list (client 0.2.19, #6)
+// In this folder the nonce comparison and the node's token logs already catch a cut list in practice; these tests pin
+// the client's own rule in pages() by giving a nonce equal to what was read, so only the cut list itself can fail it.
+const realFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
+const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json' } });
+const quietNode: TokenLogCheck = { node: { blockNumber: async () => 1_000n, getLogs: async () => [], getCode: async () => '0x' }, fromBlock: 0n };
+/** The explorer lists one ETH send per page; `pages` pages exist, and page `missing` (if any) answers 404. */
+function explorer(pages: number, missing?: number) {
+  globalThis.fetch = (async (u: string) => {
+    const url = new URL(u);
+    const p = url.pathname.toLowerCase();
+    if (!p.endsWith(`/addresses/${SA.toLowerCase()}/transactions`)) return json({ items: [], next_page_params: null });
+    const n = Number(url.searchParams.get('page') ?? '0');
+    if (n === missing) return json({ message: 'not found' }, 404);
+    const to = `0x${'d'.repeat(39)}${n}`;
+    return json({ items: [{ from: { hash: SA.toLowerCase() }, to: { hash: to }, value: '1000', raw_input: '0x' }], next_page_params: n + 1 < pages ? { page: n + 1 } : null });
+  }) as typeof fetch;
+}
+
+test('0xasuma 24 Nov (client #6): an explorer page missing in the middle of the list makes the history incomplete', async () => {
+  explorer(3);
+  const whole = await loadWithdrawalHistory({ blockscout: 'https://x/api/v2' }, [SA], undefined, { [SA]: 3 }, quietNode);
+  assert.deepEqual([whole.ok, whole.history.length], [true, 3]);
+  explorer(3, 1);
+  assert.equal((await loadWithdrawalHistory({ blockscout: 'https://x/api/v2' }, [SA], undefined, { [SA]: 1 }, quietNode)).ok, false);
+});
+
+test('0xasuma 24 Nov (client #6): a list longer than the pages read is never complete', async () => {
+  explorer(9);
+  assert.equal((await loadWithdrawalHistory({ blockscout: 'https://x/api/v2' }, [SA], undefined, { [SA]: 4 }, quietNode)).ok, false);
 });
