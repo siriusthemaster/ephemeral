@@ -85,7 +85,10 @@ test('0xvijay 22 Nov: a stranger s funded announcement between the payer s annou
   const transfers = [arrive(S(3), 11, A + 5, null, X), arrive(S(3), 12, A + 20, TA, P)]; // the stranger's wei, then the payer's token
   const r = confirm(logs, transfers, { [h(10)]: P, [h(11)]: X, [h(12)]: P });
   assert.ok(rows(r).some(([asset, tx]) => asset === 'TOKEN' && tx === h(12)), JSON.stringify(rows(r)));
-  assert.equal(r.unfunded, 0);
+  // since 25 Nov the stranger's wei between the payer's announcement and its late payment is no payment at all (it
+  // moved the address's first block to before the real payment), so the stranger's announcement is unfunded
+  assert.deepEqual(rows(r), [['TOKEN', h(12)]]);
+  assert.equal(r.unfunded, 1);
 });
 
 // ------------------------------------------------------------------ (2) residual reach of a later announcement

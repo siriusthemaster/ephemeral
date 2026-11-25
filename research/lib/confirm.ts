@@ -15,8 +15,12 @@
  *   - a token transfer in that window makes it a token payment; ETH that arrives with it is gas, not the payment;
  *   - otherwise ETH in that window makes it an ETH payment (the payer's own when it sent any; on a later announcement
  *     of a funded address only the payer's own, bug bounty 12 and 21 Nov);
- *   - otherwise a transfer the payer itself signed up to a day after the window is the payment (bug bounty 22 Nov);
+ *   - otherwise a transfer the payer itself signed up to a day after the window is the payment (bug bounty 22 Nov), or a
+ *     relayed transfer of the token the announcement names whose log names the payer (bug bounty 25 Nov);
  *   - otherwise nothing arrived and the announcement is left out (counted as unfunded).
+ * When nothing in the window is the payer's own (no transfer it signed, no relayed transfer of the named token from it)
+ * and the payer paid later, that later payment wins over a stranger's wei or dust in the window (bug bounty 24 and
+ * 25 Nov: a stranger's arrival in the window hid the payer's late payment and its H2 link).
  * The payment transaction (its sender is the payer for H2) is the transaction that moved the value.
  *
  * A stranger can also send a token to the address (bug bounty N14, 3 Nov), and announce it (bug bounty 4 and 5 Nov:
@@ -110,9 +114,16 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
   const order = logs
     .map((p, i) => ({ p, i }))
     .sort((x, y) => x.p.blockNumber - y.p.blockNumber || x.p.logIndex - y.p.logIndex || x.i - y.i);
-  const fundedAt = new Map<string, { block: number; payer: string | undefined }>();
+  // `paidFrom`: the block of the earliest transfer the first funded announcement took as its payment
+  const fundedAt = new Map<string, { block: number; payer: string | undefined; paidFrom: number }>();
   const claimed = (t: TransferLite, stealth: string) => seen.has(`${t.hash}|${stealth}|${t.token ?? 'eth'}`);
   const byIndex = new Map<number, PaymentLog[]>();
+  // An Umbra payment is the Umbra contract's own transfer: an ERC-5564 announcement cannot claim it a second time (bug
+  // bounty 25 Nov: a stranger's announcement made one Umbra transfer two payments with the same transaction).
+  for (const p of logs) if (p.source !== 'erc5564') seen.add(`${p.txHash}|${p.stealth}|${p.token ?? 'eth'}`);
+  // From the first announcement of an address, of any source, anyone can know it: before it, only its payer could.
+  const announcedFrom = new Map<string, number>();
+  for (const p of logs) announcedFrom.set(p.stealth, Math.min(p.blockNumber, announcedFrom.get(p.stealth) ?? Infinity));
   // the blocks of each address's announcements by each signer, in chain order: a payer's late transfer belongs to its
   // own next announcement of the address, not to an earlier one that stayed unfunded
   const announcedBy = new Map<string, number[]>();
@@ -129,7 +140,17 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
       continue;
     }
     const first = fundedAt.get(p.stealth);
-    const later = first !== undefined && first.block < p.blockNumber;
+    // An announcement in the same block as the first funded one, after it, is a later one too (bug bounty 25 Nov: with
+    // a strict comparison it took the first announcement's day-long look-back without its payer filter and turned the
+    // first payer's discarded dust into a payment).
+    const later = first !== undefined && first.block <= p.blockNumber;
+    // A later announcement takes nothing that arrived after the address was first announced and before the first funded
+    // announcement's own payment (bug bounty 25 Nov: in the announce-first flow a stranger's wei and announcement
+    // between the payer's announcement and its late payment became the address's first payment, which moved its first
+    // block, scope, year and H5 window to before the real payment). What arrived before any announcement stays in reach:
+    // only its payer could know the address then.
+    const inReach = (t: TransferLite): boolean =>
+      !(first !== undefined && later && t.block >= (announcedFrom.get(p.stealth) ?? Infinity) && t.block < first.paidFrom);
     let arrived: TransferLite[];
     if (first !== undefined && later) {
       arrived = arrivals(p, incoming, WINDOW_BEFORE);
@@ -147,6 +168,7 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
         arrived = [...older, ...arrived];
       }
     } else arrived = arrivals(p, incoming, WINDOW_BEFORE_FIRST);
+    arrived = arrived.filter(inReach);
     const allTokens = arrived.filter((t) => !ETH_CATEGORIES.has(t.category) && t.token !== null);
     const eth = arrived.filter((t) => ETH_CATEGORIES.has(t.category));
     // Metadata that names no token (too short, an unknown selector, or a token selector without the token) cannot
@@ -175,15 +197,23 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
     // A payment that arrived after the announcement's own window, in a transfer its payer signed (bug bounty 22 Nov:
     // the client announces first and its "Finish payment" pays later without announcing again). Only the payer's own
     // signature counts there, so a stranger cannot place anything in it, and it ends before the payer's next
-    // announcement of the address, which then reads its own payment.
+    // announcement of the address, which then reads its own payment. A relayed transfer (a permit or
+    // transferWithAuthorization) of the very token the announcement names, whose log names the payer as its sender,
+    // counts too, as it does inside the window (bug bounty 25 Nov: the same relayed payment made late was lost); a
+    // stranger's transfer of that token names the stranger.
     const late = (): TransferLite[] => {
       if (payer === undefined) return [];
       const next = (announcedBy.get(`${p.stealth}|${payer}`) ?? []).find((b) => b > p.blockNumber);
       const end = Math.min(p.blockNumber + WINDOW_LATE, next === undefined ? Infinity : next - 1);
+      const own = (t: TransferLite): boolean => senderOf(t.hash) === payer || (namesToken && t.token === p.token && t.from === payer);
       return (incoming(p.stealth) ?? []).filter(
-        (t) => t.to === p.stealth && t.from !== p.stealth && t.block > p.blockNumber + WINDOW_AFTER && t.block <= end && senderOf(t.hash) === payer && !claimed(t, p.stealth),
+        (t) =>
+          t.to === p.stealth && t.from !== p.stealth && t.block > p.blockNumber + WINDOW_AFTER && t.block <= end && own(t) && !claimed(t, p.stealth) && inReach(t),
       );
     };
+    // Something next to the announcement that is the payer's own: a transfer it signed (or the announcement's own
+    // transaction), or a relayed transfer of the named token whose log names it.
+    const payersOwn = payer !== undefined && (arrived.some((t) => byPayer(t.hash)) || bound.some((t) => t.from === payer));
     // The ETH that can be this payment: the payer's own when it sent any (bug bounty 12 Nov: a stranger's ETH in the
     // same window became part of the payment). On a later announcement of an already funded address, another party's
     // ETH is never its payment when every ETH signer is known (bug bounty 21 Nov: a zero-value announcement next to a
@@ -210,6 +240,14 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
       if (allTokens.length > 0) tokenDust++;
       tokens = null;
     } else tokens = allTokens; // the payer sent no ETH: the tokens are what was paid
+    // Nothing in the window is the payer's own, and the payer paid later: that is the payment, and what a stranger put
+    // in the window (wei, or dust of any token, also the named one) is not (bug bounty 24 and 25 Nov: it hid the late
+    // payment, its sender and its H2 link). A relayer's ETH payment, with nothing later from the announcement's signer,
+    // still counts as before.
+    if (tokens !== null && payer !== undefined && !payersOwn && late().length > 0) {
+      if (allTokens.length > 0) tokenDust++;
+      tokens = null;
+    }
     let asset: 'TOKEN' | 'ETH' | null = null;
     let picked: TransferLite[] = [];
     if (tokens !== null) {
@@ -229,7 +267,7 @@ export function confirmPayments(logs: readonly PaymentLog[], incoming: Incoming,
         continue;
       }
     }
-    if (!fundedAt.has(p.stealth)) fundedAt.set(p.stealth, { block: p.blockNumber, payer });
+    if (!fundedAt.has(p.stealth)) fundedAt.set(p.stealth, { block: p.blockNumber, payer, paidFrom: Math.min(...picked.map((t) => t.block)) });
     const out: PaymentLog[] = [];
     byIndex.set(i, out);
     const claimedOther =
