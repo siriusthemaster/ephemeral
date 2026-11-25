@@ -444,7 +444,7 @@ test/fixtures/epoch7.json      v1 plan written by ts/fixture.ts (12 NFTs, 6 owne
 test/fixtures/notes8.json      v2 plan written by ts/notes-fixture.ts (7 owners incl. a previous owner, 21 notes) and
                                one holder's receipts, checked against Solidity's own encoding
 test/fixtures/notes200.json    v2 200-holder epoch (denominations and counts) for the gas test
-ts/stealth.ts                  ERC-5564 scheme 1 (same code as the ephemeral client)
+ts/stealth.ts                  ERC-5564 scheme 1: the client's src/lib/stealth.ts as of client 0.2.19 (ts/stealth.test.ts)
 ts/payout-plan.ts              v1 operator: planEpoch, settleCalldata; holder: findMyPayouts
 ts/proof.ts                    v1 leaves, Merkle tree, proveEntitlement / verifyEntitlement
 ts/notes.ts                    v2 rule (roundDown, topExponent, decompose, expectedBatch, withCarries), planNotesEpoch,
