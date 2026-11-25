@@ -3,11 +3,12 @@
 //     the client fixes that were missing here: a payment through a contract blocks H2 (#59, #48, #55), the registry
 //     answer for both forms of an address (#61, #118), the direct registry answer for the destination (#34), and a
 //     limited payment scan never reads as complete history (scanCoverage).
+// (2) The EIP-4788 and EIP-2935 system contracts are unspendable destinations (Marwan, 22 Nov).
 // (3) What stays stricter here than in the client: a token withdrawal without its token contract blocks.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { Hex } from 'viem';
-import { H1_REGISTRY_UNREAD, H2_VIA_CONTRACT, blocking, l1Of, scanCoverage, withdrawChecks, type GuardInput } from './guards.ts';
+import { getAddress, type Hex } from 'viem';
+import { H1_REGISTRY_UNREAD, H2_VIA_CONTRACT, blocking, isUnspendable, l1Of, scanCoverage, withdrawChecks, type GuardInput } from './guards.ts';
 
 const KEY = '0x1111111111111111111111111111111111111111' as Hex;
 const DEST = '0x2222222222222222222222222222222222222222' as Hex;
@@ -80,6 +81,27 @@ test('0xasuma 24 Nov (scanCoverage): a payment scan limited to recent days never
   assert.equal(line('H5', base({ ...token, ...scanCoverage('all', true) }))!.level, 'ok');
 });
 
+// ------------------------------------------------------------------ (2) system contracts
+const SYSTEM = [
+  ['0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02', /EIP-4788 beacon roots/], // EIP-4788 BEACON_ROOTS_ADDRESS
+  ['0x0000F90827F1C53a10cb7A02335B175320002935', /EIP-2935 history storage/], // EIP-2935 HISTORY_STORAGE_ADDRESS
+] as const;
+
+test('Marwan 22 Nov: the EIP-4788 and EIP-2935 system contracts are unspendable, in any letter case', () => {
+  for (const [addr, name] of SYSTEM) {
+    for (const d of [addr, addr.toLowerCase(), '0x' + addr.slice(2).toUpperCase(), getAddress(addr)]) {
+      assert.equal(isUnspendable(d), true, d);
+      for (const isToken of [false, true]) {
+        const c = withdrawChecks(base({ destination: d, isToken, tokenAddress: TOKEN }));
+        assert.deepEqual(c.map((x) => [x.id, x.level]), [['burn', 'block']], d);
+        assert.match(c[0]!.text, name);
+      }
+    }
+  }
+  // control: the old EIP-2935 address from an earlier draft of the EIP is an ordinary address here
+  assert.equal(isUnspendable('0x0aae40965e6800cd9b1f4b05ff21581047e3f91e'), false);
+});
+
 // ------------------------------------------------------------------ (3) stricter here than the client
 test('a token withdrawal without its token contract still blocks here (cannot check), also with the token confirmed', () => {
   const g = { isToken: true, gasFrom: [], token: { hasCode: true, standardTransfer: true } };
@@ -89,4 +111,3 @@ test('a token withdrawal without its token contract still blocks here (cannot ch
   }
   assert.equal(line('token', base({ ...g, tokenAddress: TOKEN })), undefined);
 });
-

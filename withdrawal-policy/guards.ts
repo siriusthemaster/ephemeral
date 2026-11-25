@@ -1,7 +1,7 @@
-// The ephemeral client's src/lib/guards.ts as of client 0.2.19-beta (ephemeral-client commit 2d12269), with one
-// addition kept from this module, marked "this module": a token withdrawal without its token contract blocks (bug
-// bounty, 3 Nov). Everything else is the client's code as it ships (bug bounty, 24 Nov: this copy had fallen behind
-// the client).
+// The ephemeral client's src/lib/guards.ts as of client 0.2.19-beta (ephemeral-client commit 2d12269), with two
+// additions made here first, each marked "this module": the EIP-4788 and EIP-2935 system contracts are unspendable
+// (bug bounty, 22 Nov), and a token withdrawal without its token contract blocks (bug bounty, 3 Nov). Everything else
+// is the client's code as it ships (bug bounty, 24 Nov: this copy had fallen behind the client).
 //
 // Withdrawal policy engine: the checks behind H1 to H5 and the timing advice. Pure (no network): easy to test.
 // Closed by default: the key wallet (H1, also the registrant) and the payer (H2) are blocked as destinations, and when
@@ -139,6 +139,10 @@ const UNSPENDABLE = new Map([
   // calls come from and EIP-7708 logs ETH moves under: nobody holds a key for either
   ['0x0000000000000000000000000000000000000100', 'the P256VERIFY precompile 0x…0100'],
   ['0xfffffffffffffffffffffffffffffffffffffffe', 'the system address 0xff…fe'],
+  // this module (bug bounty 22 Nov): the EIP-4788 beacon roots and EIP-2935 history storage system contracts. ETH sent
+  // there reverts where they have code and is stuck where they have none, and a token sent there is stuck for good
+  ['0x000f3df6d732807ef1319fb7b8bb8522d0beac02', 'the EIP-4788 beacon roots contract'],
+  ['0x0000f90827f1c53a10cb7a02335b175320002935', 'the EIP-2935 history storage contract'],
 ]);
 /** True for a destination nothing ever comes back from (the list above), in any letter case. */
 export const isUnspendable = (a: unknown) => typeof a === 'string' && UNSPENDABLE.has(a.trim().toLowerCase());
