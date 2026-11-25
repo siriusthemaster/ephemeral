@@ -128,8 +128,10 @@ interface StealthView {
   firstTs: number;
   senders: Set<string>;
   tokens: Set<string>;
-  /** tokens paid straight to the stealth address (ERC-5564). Umbra token payments sit in the Umbra contract instead and
-   *  leave only through TokenWithdrawal, so a direct transfer of the same token is not that payment leaving. */
+  /** tokens paid straight to the stealth address (ERC-5564) and never through Umbra. Umbra token payments sit in the
+   *  Umbra contract instead and leave only through TokenWithdrawal, so a direct transfer of the same token is not that
+   *  payment leaving, also when an ERC-5564 row names the same token (bug bounty 25 Nov: a stranger's announcement
+   *  with one unit of that token turned the owner's direct transfer into the Umbra payment's withdrawal). */
   directTokens: Set<string>;
   paymentTxs: Set<string>;
   /** first payment block of each paid asset ('eth' or the token contract): an asset that left before its own payment
@@ -198,6 +200,7 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
     if (scope.firstBefore !== undefined && firstBlock >= scope.firstBefore) continue;
     const first = ps.find((p) => p.block === firstBlock) as Payment;
     const assets = new Set(ps.map((p) => p.asset));
+    const umbraTokens = new Set(ps.filter((p) => p.source === 'umbra' && p.token !== null).map((p) => p.token as string));
     const firstOf = new Map<string, number>();
     for (const p of ps) {
       const key = p.asset === 'ETH' ? 'eth' : p.token;
@@ -209,7 +212,7 @@ function views(ds: Dataset, scope: Scope): StealthView[] {
       firstTs: first.timestamp,
       senders: new Set(ps.map((p) => p.sender).filter((s) => s !== '')),
       tokens: new Set(ps.map((p) => p.token).filter((t): t is string => t !== null)),
-      directTokens: new Set(ps.filter((p) => p.source !== 'umbra').map((p) => p.token).filter((t): t is string => t !== null)),
+      directTokens: new Set(ps.filter((p) => p.source !== 'umbra' && p.token !== null && !umbraTokens.has(p.token)).map((p) => p.token as string)),
       paymentTxs: new Set(ps.map((p) => p.txHash)),
       firstOf,
       assets,
@@ -275,24 +278,17 @@ function registrants(ds: Dataset, scope: Scope): Set<string> {
   return set;
 }
 
-const stealthSets = new WeakMap<object, WeakMap<Scope, { n: number; set: Set<string> }>>();
-/** A contract among recipients and funders that H3 and H5 leave out (routers, bridges, hot wallets). A stealth address
- *  with code (a smart account or a delegation) is ours to measure, not such a contract (bug bounty 8 Nov, Znax), but
- *  only one this scope measures: a payment to an address that had sent transactions before it (`preUsed`, which every
- *  deployed contract has) or one outside the scope's sources or blocks does not make a router ours (bug bounty 21 Nov:
- *  one announcement and a unit of any token to a router put it among the payments and brought it back into H3 and H5). */
-function foreignContract(ds: Dataset, scope: Scope, a: string): boolean {
-  if (!ds.contracts.has(a)) return false;
-  let byScope = stealthSets.get(ds.payments);
-  if (!byScope) stealthSets.set(ds.payments, (byScope = new WeakMap()));
-  let c = byScope.get(scope);
-  if (!c || c.n !== ds.payments.length) {
-    const set = new Set<string>();
-    for (const p of ds.payments)
-      if (!ds.preUsed.has(p.stealth) && scope.sources.has(p.source) && (scope.asOfBlock === undefined || p.block < scope.asOfBlock)) set.add(p.stealth);
-    byScope.set(scope, (c = { n: ds.payments.length, set }));
-  }
-  return !c.set.has(a);
+/** A contract among recipients and funders that H3 and H5 leave out (routers, bridges, hot wallets): code at the end
+ *  block and already at its first event (scan.ts step 8). A payment row naming it does not make it a stealth address
+ *  of ours (bug bounty 25 Nov, the pre-deployment case of 21 Nov): a contract that already existed at the payment had
+ *  sent transactions (`preUsed`), so the only contracts a fresh payment row can name are ones deployed after it, and a
+ *  router deployed at a predictable address after a stranger's spam payment looks exactly like a counterfactual stealth
+ *  smart account. Both are left out; the cost is that clusters around a stealth smart account that already had code
+ *  when the first withdrawal reached it are not counted (an undercount). An EIP-7702 delegated address is no contract
+ *  here (its key controls it) and stays measured, and so does a wallet whose code came after its first event. This
+ *  also keeps every scope alike (bug bounty 24 Nov: the per-scope set ignored `firstFrom` and `firstBefore`). */
+function foreignContract(ds: Dataset, a: string): boolean {
+  return ds.contracts.has(a);
 }
 
 function measure(ds: Dataset, scope: Scope, only?: (v: StealthView) => boolean): Measure {
@@ -364,7 +360,7 @@ function measure(ds: Dataset, scope: Scope, only?: (v: StealthView) => boolean):
           !selfTxs.has(f.txHash) &&
           f.from !== v.addr &&
           !v.senders.has(f.from) && // the payer topping up gas reveals nothing new
-          !foreignContract(ds, scope, f.from) && // routers, bridges, exchanges' hot contracts
+          !foreignContract(ds, f.from) && // routers, bridges, exchanges' hot contracts
           (regs.has(f.from) || allDests.has(f.from)),
       );
       if (h5) m.h5++;
@@ -425,7 +421,7 @@ export function analyze(ds: Dataset, opts: AnalyzeOptions): Analysis {
     const d = [...dests][0] as string;
     // a sink nobody owns (zero, 0x…dEaD, a precompile, the system address) collects nothing: two strangers burning
     // there are not one collector (bug bounty 3 Nov)
-    if (foreignContract(ds, allScope, d) || d === v.addr || isSink(d)) continue;
+    if (foreignContract(ds, d) || d === v.addr || isSink(d)) continue;
     groups.set(d, (groups.get(d) ?? 0) + 1);
   }
   let clusteredStealth = 0;
