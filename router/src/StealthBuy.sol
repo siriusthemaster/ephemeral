@@ -45,6 +45,7 @@ contract StealthBuy is IUnlockCallback {
     error TipTooHigh();
     error NothingToSwap();
     error TooLittleReceived(uint256 out, uint256 minOut);
+    error NothingReceived();
     error EthTransferFailed();
     error StealthAddressNotFresh();
     error StealthAddressUsed();
@@ -64,7 +65,8 @@ contract StealthBuy is IUnlockCallback {
     /// @param stealthAddress  one-time address generated from the receiver's stealth meta-address
     /// @param ephemeralPubKey compressed secp256k1 public key (33 bytes) used to generate it
     /// @param viewTag         first byte of the hashed shared secret; lets the receiver skip 255/256 of announcements
-    /// @param minOut          slippage guard: least amount of the token the stealth address must receive
+    /// @param minOut          slippage guard: least amount of the token the stealth address must receive (a buy that
+    ///                        delivers nothing reverts even with minOut 0)
     /// @param gasTip          ETH sent along to the stealth address for gas (0 to skip, at most MAX_GAS_TIP)
     struct Stealth {
         address stealthAddress;
@@ -106,6 +108,9 @@ contract StealthBuy is IUnlockCallback {
         // 8 Nov). The address held none of the token before the swap (checked above), so its balance is what arrived;
         // the slippage guard and the announced amount both use it.
         tokensOut = key.currency1.balanceOf(to);
+        // A buy that delivers nothing is no payment: with minOut 0 it used to succeed, announce a payment of 0 and mark
+        // the address used for good (bug bounty 24 Nov, informational: only the caller's own ETH and gas were at stake)
+        if (tokensOut == 0) revert NothingReceived();
         if (tokensOut < s.minOut) revert TooLittleReceived(tokensOut, s.minOut);
         _announce(s, Currency.unwrap(key.currency1), tokensOut, ethPaid);
 

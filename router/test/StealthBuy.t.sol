@@ -105,6 +105,20 @@ contract StealthBuyTest is StealthBuyBase {
         sb.buy{value: 0.05 ether}(poolKey, StealthBuy.Stealth(stealth, ephKey, viewTag, quote + 1, 0), "");
     }
 
+    /// @dev bug bounty 24 Nov (0xasuma, informational): 1 wei in, the 0.3% fee rounds the output to 0. With minOut 0 the
+    ///      buy used to succeed, announce a payment of 0 and mark the stealth address used. Now it reverts and leaves
+    ///      no record, so the address can still be paid.
+    function test_nothingDeliveredReverts() public {
+        vm.prank(buyer);
+        vm.expectRevert(StealthBuy.NothingReceived.selector);
+        sb.buy{value: 1}(poolKey, StealthBuy.Stealth(stealth, ephKey, viewTag, 0, 0), "");
+        assertFalse(sb.used(stealth), "no record");
+        assertEq(tkn.balanceOf(stealth), 0);
+        vm.prank(buyer);
+        uint256 out = sb.buy{value: 0.01 ether}(poolKey, StealthBuy.Stealth(stealth, ephKey, viewTag, 0, 0), "");
+        assertGt(out, 0, "a real buy to the same address still works");
+    }
+
     function test_rejects() public {
         vm.startPrank(buyer);
         vm.expectRevert(StealthBuy.ZeroStealthAddress.selector);
